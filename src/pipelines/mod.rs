@@ -1,4 +1,4 @@
-//! Demo pipelines built on top of the core RMS toolkit.
+//! Demo pipelines built on top of the reusable RMS library modules.
 
 pub mod circom_json;
 pub mod greater_than;

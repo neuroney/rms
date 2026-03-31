@@ -1,9 +1,35 @@
 use crate::r1cs::{ExportConstraint, LinComb, RmsLinearExport, Term, Variable, R1CS};
 use ark_ff::PrimeField;
+use serde::{de::DeserializeOwned, Serialize};
 use std::error::Error;
 use std::fs;
 use std::io::Write;
 use std::path::Path;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OutputFormat {
+    Json,
+    Bin,
+}
+
+impl OutputFormat {
+    pub fn parse(raw: &str) -> Result<Self, String> {
+        match raw {
+            "json" => Ok(Self::Json),
+            "bin" => Ok(Self::Bin),
+            other => Err(format!(
+                "unsupported output format '{other}', expected 'json' or 'bin'"
+            )),
+        }
+    }
+
+    pub fn extension(self) -> &'static str {
+        match self {
+            OutputFormat::Json => "json",
+            OutputFormat::Bin => "bin",
+        }
+    }
+}
 
 pub fn export_r1cs_to_json<P: AsRef<Path>>(r1cs: &R1CS, path: P) -> Result<(), Box<dyn Error>> {
     let exported = RmsLinearExport::from_r1cs(r1cs)?;
@@ -19,32 +45,33 @@ pub fn write_r1cs_json<P: AsRef<Path>>(
     path: P,
     r1cs: &RmsLinearExport,
 ) -> Result<(), Box<dyn Error>> {
-    let json = serde_json::to_string_pretty(r1cs)?;
-    let mut file = fs::File::create(path)?;
-    file.write_all(json.as_bytes())?;
-    file.write_all(b"\n")?;
-    Ok(())
+    write_json_pretty_file(path, r1cs)
 }
 
 pub fn write_r1cs_bin<P: AsRef<Path>>(
     path: P,
     r1cs: &RmsLinearExport,
 ) -> Result<(), Box<dyn Error>> {
-    let encoded = bincode::serialize(r1cs)?;
-    fs::write(path, encoded)?;
-    Ok(())
+    write_bin_file(path, r1cs)
+}
+
+pub fn write_r1cs<P: AsRef<Path>>(
+    path: P,
+    r1cs: &RmsLinearExport,
+    format: OutputFormat,
+) -> Result<(), Box<dyn Error>> {
+    match format {
+        OutputFormat::Json => write_r1cs_json(path, r1cs),
+        OutputFormat::Bin => write_r1cs_bin(path, r1cs),
+    }
 }
 
 pub fn load_r1cs_from_json<P: AsRef<Path>>(path: P) -> Result<RmsLinearExport, Box<dyn Error>> {
-    let json = fs::read_to_string(path)?;
-    let exported = serde_json::from_str(&json)?;
-    Ok(exported)
+    load_json_file(path)
 }
 
 pub fn load_r1cs_from_bin<P: AsRef<Path>>(path: P) -> Result<RmsLinearExport, Box<dyn Error>> {
-    let bytes = fs::read(path)?;
-    let exported = bincode::deserialize(&bytes)?;
-    Ok(exported)
+    load_bin_file(path)
 }
 
 impl RmsLinearExport {
@@ -151,4 +178,40 @@ fn format_term(term: &Term, prefix: &str) -> String {
         "1" => format!("{}{}", prefix, term.index),
         coeff => format!("{}*{}{}", coeff, prefix, term.index),
     }
+}
+
+pub(crate) fn write_json_pretty_file<T: Serialize, P: AsRef<Path>>(
+    path: P,
+    value: &T,
+) -> Result<(), Box<dyn Error>> {
+    let json = serde_json::to_string_pretty(value)?;
+    let mut file = fs::File::create(path)?;
+    file.write_all(json.as_bytes())?;
+    file.write_all(b"\n")?;
+    Ok(())
+}
+
+pub(crate) fn write_bin_file<T: Serialize, P: AsRef<Path>>(
+    path: P,
+    value: &T,
+) -> Result<(), Box<dyn Error>> {
+    let encoded = bincode::serialize(value)?;
+    fs::write(path, encoded)?;
+    Ok(())
+}
+
+pub(crate) fn load_json_file<T: DeserializeOwned, P: AsRef<Path>>(
+    path: P,
+) -> Result<T, Box<dyn Error>> {
+    let json = fs::read_to_string(path)?;
+    let value = serde_json::from_str(&json)?;
+    Ok(value)
+}
+
+pub(crate) fn load_bin_file<T: DeserializeOwned, P: AsRef<Path>>(
+    path: P,
+) -> Result<T, Box<dyn Error>> {
+    let bytes = fs::read(path)?;
+    let value = bincode::deserialize(&bytes)?;
+    Ok(value)
 }

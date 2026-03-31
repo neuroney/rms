@@ -5,6 +5,7 @@ edition = "2021"
 description = "Hand-built R1CS/RMS toolkit with import, transform, execution, and demo circuits"
 readme = "README.md"
 publish = false
+default-run = "zkbench"
 
 [dependencies]
 ark-bn254 = "0.4"
