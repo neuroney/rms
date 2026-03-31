@@ -1756,12 +1756,14 @@ mod tests {
         fs::write(&file, circom_json).expect("写入 circom fixture 失败");
 
         let imported = import_circom_constraints_json(&file).expect("导入 circom json 失败");
-        assert_eq!(imported.original_constraints, 4);
+        assert_eq!(imported.original_constraints, 2);
         assert!(imported.normalized_r1cs.constraints.len() >= 4);
+        assert_eq!(imported.input_signal_ids, vec![2, 3, 6]);
 
         let input_x2 = imported.input_signal_to_index[&2];
         let input_x3 = imported.input_signal_to_index[&3];
-        let mut assignment = Assignment::new(vec![(input_x2, 3), (input_x3, 11)]);
+        let input_x6 = imported.input_signal_to_index[&6];
+        let mut assignment = Assignment::new(vec![(input_x2, 3), (input_x3, 11), (input_x6, 18)]);
 
         assert!(execute_circuit(&imported.normalized_r1cs, &mut assignment).is_some());
         assert!(verify_assignment(&imported.normalized_r1cs, &assignment));
