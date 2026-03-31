@@ -2,6 +2,9 @@
 name = "zkbench"
 version = "0.1.0"
 edition = "2021"
+description = "Hand-built R1CS/RMS toolkit with import, transform, execution, and demo circuits"
+readme = "README.md"
+publish = false
 
 [dependencies]
 ark-bn254 = "0.4"

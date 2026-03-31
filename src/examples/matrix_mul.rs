@@ -1,9 +1,10 @@
+use crate::circuits::{generate_matrix_mul_r1cs, MatrixMulCircuit};
 use crate::evalr1cs::{execute_circuit, verify_assignment, Assignment};
 use crate::export::{
     export_r1cs_to_bin, export_r1cs_to_json, load_r1cs_from_bin, load_r1cs_from_json,
     terms_to_export_string,
 };
-use crate::r1cs::{generate_matrix_mul_r1cs, MatrixMulCircuit, R1CS};
+use crate::r1cs::R1CS;
 use crate::transform::{choudhuri_transform, eliminate_common_subexpressions, TransformResult};
 use crate::utils::{fr_to_u64, print_constraints};
 use std::error::Error;
