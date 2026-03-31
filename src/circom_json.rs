@@ -105,16 +105,20 @@ struct BinaryR1csHeader {
     m_constraints: usize,
 }
 
-struct BuildState {
+struct BuildState<'a> {
     r1cs: R1CS,
     signal_defs: HashMap<usize, SignalDefinition>,
     signal_materialized: HashSet<usize>,
     signal_in_progress: HashSet<usize>,
+    linear_signal_in_progress: HashSet<usize>,
     input_signal_to_index: HashMap<usize, usize>,
     witness_signal_to_index: HashMap<usize, usize>,
     next_witness: usize,
     zero_witness: Option<usize>,
     input_lift_cache: HashMap<String, usize>,
+    constraints: &'a [GenericConstraint],
+    linear_constraints_by_signal: HashMap<usize, Vec<usize>>,
+    used_linear_constraints: HashSet<usize>,
 }
 
 struct AliasResolver {
@@ -491,6 +495,8 @@ fn import_generic_constraints(
         );
         (live_signal_ids, active_check_constraints)
     };
+    let linearly_definable_signal_ids =
+        collect_linearly_definable_signal_ids(&generic_constraints, &active_check_constraints);
 
     let unknown_non_inputs = live_signal_ids
         .iter()
@@ -499,6 +505,7 @@ fn import_generic_constraints(
             *signal_id != 0
                 && !signal_definitions.contains_key(signal_id)
                 && !input_signal_ids.contains(signal_id)
+                && !linearly_definable_signal_ids.contains(signal_id)
         })
         .collect::<Vec<_>>();
 
@@ -762,32 +769,9 @@ fn extract_signal_definitions(
 ) -> Result<(HashMap<usize, SignalDefinition>, HashSet<usize>), Box<dyn Error>> {
     let mut definitions = HashMap::new();
     let mut consumed_constraints = HashSet::new();
-    let mut deferred_alias_constraints = Vec::new();
 
     for (constraint_idx, constraint) in constraints.iter().enumerate() {
         if constraint.is_linear() {
-            if is_simple_signal_alias(constraint) {
-                deferred_alias_constraints.push(constraint_idx);
-                continue;
-            }
-
-            if let Some(target) = choose_linear_definition_target(
-                &constraint.c,
-                &definitions,
-                protected_signal_ids,
-                preferred_signal_ids,
-            ) {
-                let coeff = constraint
-                    .c
-                    .coefficient_of(target)
-                    .ok_or_else(|| format!("线性约束中找不到目标 signal {}", target))?;
-                let inv = coeff
-                    .inverse()
-                    .ok_or_else(|| format!("signal {} 的系数不可逆", target))?;
-                let expr = constraint.c.without_signal(target).scale(-inv);
-                definitions.insert(target, SignalDefinition::Linear(expr));
-                consumed_constraints.insert(constraint_idx);
-            }
             continue;
         }
 
@@ -819,67 +803,7 @@ fn extract_signal_definitions(
         }
     }
 
-    let mut progressed = true;
-    while progressed && !deferred_alias_constraints.is_empty() {
-        progressed = false;
-        let mut remaining = Vec::new();
-
-        for constraint_idx in deferred_alias_constraints {
-            let constraint = &constraints[constraint_idx];
-            if let Some(target) = choose_alias_definition_target(
-                &constraint.c,
-                signal_stats,
-                &definitions,
-                protected_signal_ids,
-                preferred_signal_ids,
-            ) {
-                let coeff = constraint
-                    .c
-                    .coefficient_of(target)
-                    .ok_or_else(|| format!("alias 约束中找不到目标 signal {}", target))?;
-                let inv = coeff
-                    .inverse()
-                    .ok_or_else(|| format!("signal {} 的系数不可逆", target))?;
-                let expr = constraint.c.without_signal(target).scale(-inv);
-                definitions.insert(target, SignalDefinition::Linear(expr));
-                consumed_constraints.insert(constraint_idx);
-                progressed = true;
-            } else {
-                remaining.push(constraint_idx);
-            }
-        }
-
-        deferred_alias_constraints = remaining;
-    }
-
     Ok((definitions, consumed_constraints))
-}
-
-fn choose_linear_definition_target(
-    lc: &GenericLinComb,
-    definitions: &HashMap<usize, SignalDefinition>,
-    protected_signal_ids: &HashSet<usize>,
-    preferred_signal_ids: &HashSet<usize>,
-) -> Option<usize> {
-    let candidates = lc
-        .terms
-        .iter()
-        .filter_map(|(_, signal_id)| {
-            if *signal_id == 0
-                || definitions.contains_key(signal_id)
-                || protected_signal_ids.contains(signal_id)
-            {
-                return None;
-            }
-            Some(*signal_id)
-        })
-        .collect::<Vec<_>>();
-
-    candidates
-        .iter()
-        .copied()
-        .find(|signal_id| preferred_signal_ids.contains(signal_id))
-        .or_else(|| candidates.into_iter().min())
 }
 
 fn choose_definition_target(
@@ -933,52 +857,6 @@ fn choose_definition_target(
         .map(|(signal_id, _)| signal_id)
 }
 
-fn choose_alias_definition_target(
-    lc: &GenericLinComb,
-    signal_stats: &HashMap<usize, SignalStats>,
-    definitions: &HashMap<usize, SignalDefinition>,
-    protected_signal_ids: &HashSet<usize>,
-    preferred_signal_ids: &HashSet<usize>,
-) -> Option<usize> {
-    let candidates = lc
-        .terms
-        .iter()
-        .filter_map(|(_, signal_id)| {
-            if *signal_id == 0 || protected_signal_ids.contains(signal_id) {
-                return None;
-            }
-            let stats = signal_stats.get(signal_id)?;
-            Some((*signal_id, stats))
-        })
-        .collect::<Vec<_>>();
-
-    if let Some((signal_id, _)) = candidates
-        .iter()
-        .copied()
-        .find(|(signal_id, _)| preferred_signal_ids.contains(signal_id))
-    {
-        return Some(signal_id);
-    }
-
-    let known_signal_ids = candidates
-        .iter()
-        .filter_map(|(signal_id, _)| definitions.contains_key(signal_id).then_some(*signal_id))
-        .collect::<HashSet<_>>();
-
-    if known_signal_ids.len() == 1 {
-        return candidates
-            .iter()
-            .copied()
-            .find(|(signal_id, _)| !known_signal_ids.contains(signal_id))
-            .map(|(signal_id, _)| signal_id);
-    }
-
-    candidates
-        .into_iter()
-        .max_by_key(|(signal_id, stats)| (stats.c_occurrences, stats.ab_occurrences, *signal_id))
-        .map(|(signal_id, _)| signal_id)
-}
-
 fn is_simple_signal_alias(constraint: &GenericConstraint) -> bool {
     constraint.is_linear()
         && constraint.c.terms.len() == 2
@@ -1027,11 +905,18 @@ fn build_normalized_r1cs(
         signal_defs: signal_definitions.clone(),
         signal_materialized: HashSet::new(),
         signal_in_progress: HashSet::new(),
+        linear_signal_in_progress: HashSet::new(),
         input_signal_to_index,
         witness_signal_to_index: HashMap::new(),
         next_witness: 2,
         zero_witness: None,
         input_lift_cache: HashMap::new(),
+        constraints,
+        linear_constraints_by_signal: index_linear_constraints_by_signal(
+            constraints,
+            active_check_constraints,
+        ),
+        used_linear_constraints: HashSet::new(),
     };
 
     for &signal_id in root_signal_ids {
@@ -1040,6 +925,9 @@ fn build_normalized_r1cs(
 
     for (constraint_idx, constraint) in constraints.iter().enumerate() {
         if !active_check_constraints.contains(&constraint_idx) {
+            continue;
+        }
+        if state.used_linear_constraints.contains(&constraint_idx) {
             continue;
         }
         state.materialize_check_constraint(constraint)?;
@@ -1092,11 +980,91 @@ impl GenericConstraint {
     }
 }
 
-impl BuildState {
+impl<'a> BuildState<'a> {
+    fn ensure_signal_definition(&mut self, signal_id: usize) -> Result<(), Box<dyn Error>> {
+        if self.input_signal_to_index.contains_key(&signal_id)
+            || self.signal_defs.contains_key(&signal_id)
+        {
+            return Ok(());
+        }
+
+        self.solve_linear_signal(signal_id)
+    }
+
+    fn solve_linear_signal(&mut self, signal_id: usize) -> Result<(), Box<dyn Error>> {
+        if self.input_signal_to_index.contains_key(&signal_id)
+            || self.signal_defs.contains_key(&signal_id)
+        {
+            return Ok(());
+        }
+
+        if !self.linear_signal_in_progress.insert(signal_id) {
+            return Err(format!("检测到 Circom signal {} 的循环线性求解", signal_id).into());
+        }
+
+        let candidate_indices = self
+            .linear_constraints_by_signal
+            .get(&signal_id)
+            .cloned()
+            .unwrap_or_default();
+
+        for constraint_idx in candidate_indices {
+            if self.used_linear_constraints.contains(&constraint_idx) {
+                continue;
+            }
+
+            let constraint = &self.constraints[constraint_idx];
+            let Some(coeff) = constraint.c.coefficient_of(signal_id) else {
+                continue;
+            };
+            let Some(inv) = coeff.inverse() else {
+                continue;
+            };
+            let expr = constraint.c.without_signal(signal_id).scale(-inv);
+
+            let mut deps = expr
+                .terms
+                .iter()
+                .map(|(_, dep_signal_id)| *dep_signal_id)
+                .filter(|dep_signal_id| {
+                    *dep_signal_id != 0 && !self.input_signal_to_index.contains_key(dep_signal_id)
+                })
+                .collect::<Vec<_>>();
+            deps.sort_unstable();
+            deps.dedup();
+
+            let mut solvable = true;
+            for dep_signal_id in deps {
+                if self.signal_defs.contains_key(&dep_signal_id) {
+                    continue;
+                }
+                if self.solve_linear_signal(dep_signal_id).is_err() {
+                    solvable = false;
+                    break;
+                }
+            }
+
+            if !solvable {
+                continue;
+            }
+
+            self.signal_defs
+                .insert(signal_id, SignalDefinition::Linear(expr));
+            self.used_linear_constraints.insert(constraint_idx);
+            self.linear_signal_in_progress.remove(&signal_id);
+            return Ok(());
+        }
+
+        self.linear_signal_in_progress.remove(&signal_id);
+        Err(format!("signal {} 没有可解的线性定义", signal_id).into())
+    }
+
     fn materialize_signal(&mut self, signal_id: usize) -> Result<usize, Box<dyn Error>> {
         if self.input_signal_to_index.contains_key(&signal_id) {
             return Err(format!("signal {} 是输入，不能作为 witness 物化", signal_id).into());
         }
+
+        self.ensure_signal_definition(signal_id)?;
 
         let witness_idx = self.ensure_signal_witness_index(signal_id);
 
@@ -1386,6 +1354,7 @@ impl BuildState {
                 Ok(())
             }
             signal_id => {
+                self.ensure_signal_definition(signal_id)?;
                 let definition = self
                     .signal_defs
                     .get(&signal_id)
@@ -1581,13 +1550,56 @@ fn collect_root_signal_ids(
             .public_output_signal_ids
             .iter()
             .copied()
-            .filter(|signal_id| signal_definitions.contains_key(signal_id))
+            .filter(|signal_id| *signal_id != 0)
             .collect();
     }
 
     let mut all = signal_definitions.keys().copied().collect::<Vec<_>>();
     all.sort_unstable();
     all
+}
+
+fn collect_linearly_definable_signal_ids(
+    constraints: &[GenericConstraint],
+    active_check_constraints: &HashSet<usize>,
+) -> HashSet<usize> {
+    let mut signal_ids = HashSet::new();
+
+    for (constraint_idx, constraint) in constraints.iter().enumerate() {
+        if !active_check_constraints.contains(&constraint_idx) || !constraint.is_linear() {
+            continue;
+        }
+
+        for (_, signal_id) in &constraint.c.terms {
+            if *signal_id != 0 {
+                signal_ids.insert(*signal_id);
+            }
+        }
+    }
+
+    signal_ids
+}
+
+fn index_linear_constraints_by_signal(
+    constraints: &[GenericConstraint],
+    active_check_constraints: &HashSet<usize>,
+) -> HashMap<usize, Vec<usize>> {
+    let mut index = HashMap::<usize, Vec<usize>>::new();
+
+    for (constraint_idx, constraint) in constraints.iter().enumerate() {
+        if !active_check_constraints.contains(&constraint_idx) || !constraint.is_linear() {
+            continue;
+        }
+
+        for (_, signal_id) in &constraint.c.terms {
+            if *signal_id == 0 {
+                continue;
+            }
+            index.entry(*signal_id).or_default().push(constraint_idx);
+        }
+    }
+
+    index
 }
 
 fn collect_live_signal_ids(
