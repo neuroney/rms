@@ -31,17 +31,17 @@ docs/               # repository structure notes
 
 Public API is organized under:
 
-- `zkbench::circom`
-- `zkbench::matrix_mul`
-- `zkbench::greater_than`
-- `zkbench::random_mul`
-- `zkbench::random_linear`
-- `zkbench::dense_poly`
-- `zkbench::export`
-- `zkbench::evalr1cs`
-- `zkbench::r1cs`
-- `zkbench::transform`
-- `zkbench::utils`
+- `rmsgen::circom`
+- `rmsgen::matrix_mul`
+- `rmsgen::greater_than`
+- `rmsgen::random_mul`
+- `rmsgen::random_linear`
+- `rmsgen::dense_poly`
+- `rmsgen::export`
+- `rmsgen::evalr1cs`
+- `rmsgen::r1cs`
+- `rmsgen::transform`
+- `rmsgen::utils`
 
 ## Commands
 

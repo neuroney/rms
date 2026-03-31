@@ -1,3 +1,3 @@
 fn main() -> std::process::ExitCode {
-    zkbench::cli::run()
+    rmsgen::cli::run()
 }

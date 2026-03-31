@@ -343,6 +343,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "rmsgen"
+version = "0.1.0"
+dependencies = [
+ "ark-bn254",
+ "ark-ff",
+ "ark-std",
+ "bincode",
+ "rand",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "rustc_version"
 version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -484,19 +497,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.117",
-]
-
-[[package]]
-name = "zkbench"
-version = "0.1.0"
-dependencies = [
- "ark-bn254",
- "ark-ff",
- "ark-std",
- "bincode",
- "rand",
- "serde",
- "serde_json",
 ]
 
 [[package]]
