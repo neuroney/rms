@@ -1,16 +1,39 @@
-use crate::export::{write_r1cs, OutputFormat};
+use crate::export::{print_export_constraints_preview, write_export_bundle};
 use crate::r1cs::{ExportConstraint, RmsLinearExport, Term};
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use std::collections::BTreeSet;
-use std::fs;
-use std::path::Path;
 
 pub const DEFAULT_NUM_INPUTS: usize = 5;
-pub const DEFAULT_MIN_EXP: u32 = 1;
-pub const DEFAULT_MAX_EXP: u32 = 12;
-pub const DEFAULT_BASE_SEED: u64 = 42;
+pub const DEFAULT_NUM_CONSTRAINTS: usize = 64;
+pub const DEFAULT_SEED: u64 = 42;
 
 const COEFF_POOL: &[i64] = &[-3, -2, -1, 1, 2, 3];
+
+#[derive(Clone, Debug)]
+pub struct RandomLinearRunConfig {
+    pub num_inputs: usize,
+    pub num_constraints: usize,
+    pub seed: u64,
+    pub export_stem: String,
+}
+
+impl RandomLinearRunConfig {
+    pub fn demo() -> Self {
+        Self::new(DEFAULT_NUM_INPUTS, DEFAULT_NUM_CONSTRAINTS, DEFAULT_SEED)
+    }
+
+    pub fn new(num_inputs: usize, num_constraints: usize, seed: u64) -> Self {
+        Self {
+            num_inputs,
+            num_constraints,
+            seed,
+            export_stem: format!(
+                "data/random_linear_n{}_d{}_rms",
+                num_inputs, num_constraints
+            ),
+        }
+    }
+}
 
 fn sample_coeff<R: Rng>(rng: &mut R) -> i64 {
     let idx = rng.gen_range(0..COEFF_POOL.len());
@@ -79,6 +102,9 @@ pub fn build_random_rms_linear<R: Rng>(
     if num_inputs == 0 {
         return Err("num_inputs must be >= 1".to_string());
     }
+    if depth == 0 {
+        return Err("num_constraints must be >= 1".to_string());
+    }
 
     let num_witnesses = depth + 1;
     let execution_order: Vec<usize> = (0..depth).collect();
@@ -105,62 +131,67 @@ pub fn build_random_rms_linear<R: Rng>(
     })
 }
 
-pub fn generate_batch_suite<P: AsRef<Path>>(
-    out_dir: P,
-    num_inputs: usize,
-    min_exp: u32,
-    max_exp: u32,
-    base_seed: u64,
-    format: OutputFormat,
-) -> Result<(), String> {
-    if min_exp > max_exp {
-        return Err(format!(
-            "min_exp must be <= max_exp, got {min_exp} > {max_exp}"
-        ));
+pub fn run() {
+    run_with_args(&[]).expect("随机 linear 示例失败");
+}
+
+pub fn run_with_args(args: &[String]) -> Result<(), String> {
+    if args
+        .iter()
+        .any(|arg| matches!(arg.as_str(), "--help" | "-h"))
+    {
+        return Err(usage_text().to_string());
     }
 
-    let out_dir = out_dir.as_ref();
-    fs::create_dir_all(out_dir)
-        .map_err(|err| format!("failed to create output dir {}: {err}", out_dir.display()))?;
+    let config = match args {
+        [] => RandomLinearRunConfig::demo(),
+        [num_inputs, num_constraints] => RandomLinearRunConfig::new(
+            parse_usize_arg("num_inputs", num_inputs)?,
+            parse_usize_arg("num_constraints", num_constraints)?,
+            DEFAULT_SEED,
+        ),
+        _ => return Err(usage_text().to_string()),
+    };
 
-    for exp in min_exp..=max_exp {
-        let depth = 1usize << exp;
-        let seed = base_seed.wrapping_add(depth as u64);
-        let mut rng = StdRng::seed_from_u64(seed);
-        let r1cs = build_random_rms_linear(num_inputs, depth, &mut rng)?;
+    run_with_config(config)
+}
 
-        let filename = format!(
-            "rms_linear_n{}_d{}.{}",
-            num_inputs,
-            depth,
-            format.extension()
-        );
-        let path = out_dir.join(filename);
-        write_r1cs(&path, &r1cs, format).map_err(|err| err.to_string())?;
+fn run_with_config(config: RandomLinearRunConfig) -> Result<(), String> {
+    let mut rng = StdRng::seed_from_u64(config.seed);
+    let export = build_random_rms_linear(config.num_inputs, config.num_constraints, &mut rng)?;
+    let report = write_export_bundle(&config.export_stem, &export)
+        .map_err(|err| format!("导出随机 linear RMS 电路失败: {err}"))?;
 
-        println!(
-            "wrote {}",
-            std::fs::canonicalize(&path)
-                .unwrap_or(path.clone())
-                .display()
-        );
-    }
+    println!("\n╔══════════════════════════════════════════════════╗");
+    println!("║  随机采样 Linear：输入线性组合乘 witness         ║");
+    println!("╚══════════════════════════════════════════════════╝\n");
+    println!("  输入数: {}", export.num_inputs);
+    println!("  约束数: {}", export.constraints.len());
+    println!("  witness 数: {}", export.num_witnesses);
+    println!("  JSON: {}", report.json_path);
+    println!("  BIN:  {}", report.bin_path);
+    println!("  版本: {}", report.version);
+    println!("  JSON/BIN 内容一致: {}", report.json_bin_match);
+    println!("  前 8 条 RMS 约束:");
+    print_export_constraints_preview(&export, 8);
 
     Ok(())
 }
 
-pub fn generate_default_batch_suite<P: AsRef<Path>>(
-    out_dir: P,
-    format: OutputFormat,
-) -> Result<(), String> {
-    generate_batch_suite(
-        out_dir,
-        DEFAULT_NUM_INPUTS,
-        DEFAULT_MIN_EXP,
-        DEFAULT_MAX_EXP,
-        DEFAULT_BASE_SEED,
-        format,
-    )
+fn parse_usize_arg(name: &str, raw: &str) -> Result<usize, String> {
+    raw.parse::<usize>()
+        .map_err(|err| format!("{name} 必须是非负整数，收到 {raw:?}: {err}"))
+}
+
+fn usage_text() -> &'static str {
+    "\
+用法:
+  cargo run -- random_linear
+  cargo run -- random_linear <num_inputs> <num_constraints>
+  cargo run --example random_linear -- <num_inputs> <num_constraints>
+
+说明:
+  默认值: num_inputs=5, num_constraints=64"
 }
 
 #[cfg(test)]

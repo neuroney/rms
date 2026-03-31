@@ -1,11 +1,11 @@
-use crate::circom_json::{
-    default_sym_path_for_r1cs, import_circom_file, load_circom_sym, CircomImportFormat,
-    CircomSymbolTable, ImportedCircomCircuit,
+pub use crate::circom_reader::{
+    default_sym_path_for_r1cs, import_circom_constraints_json, import_circom_file,
+    import_circom_r1cs, load_circom_sym, optimize_circom_r1cs, CircomImportFormat, CircomSymEntry,
+    CircomSymbolTable, ImportedCircomCircuit, ImportedCircomLayout,
 };
 use crate::evalr1cs::{execute_circuit, verify_assignment, Assignment};
 use crate::export::{
-    export_r1cs_to_bin, export_r1cs_to_json, load_r1cs_from_bin, load_r1cs_from_json,
-    terms_to_export_string,
+    export_r1cs_bundle, load_r1cs_from_json, terms_to_export_string, WrittenArtifacts,
 };
 use crate::r1cs::R1CS;
 use crate::transform::{eliminate_common_subexpressions, try_choudhuri_transform, TransformResult};
@@ -65,14 +65,7 @@ pub struct CircomEvalReport {
     pub witness_source: Option<String>,
 }
 
-#[derive(Clone, Debug)]
-pub struct CircomExportReport {
-    pub json_path: String,
-    pub bin_path: String,
-    pub version: String,
-    pub num_constraints: usize,
-    pub json_bin_match: bool,
-}
+pub type CircomExportReport = WrittenArtifacts;
 
 #[derive(Clone, Debug)]
 struct ExternalCommand {
@@ -281,22 +274,7 @@ pub fn export_circuit(
         .and_then(|stem| stem.to_str())
         .ok_or("Circom 路径没有可用文件名")?;
 
-    let json_path = format!("target/{}_rms.json", stem);
-    let bin_path = format!("target/{}_rms.bin", stem);
-
-    export_r1cs_to_json(&transformed.optimized, &json_path)?;
-    export_r1cs_to_bin(&transformed.optimized, &bin_path)?;
-
-    let exported_json = load_r1cs_from_json(&json_path)?;
-    let exported_bin = load_r1cs_from_bin(&bin_path)?;
-
-    Ok(CircomExportReport {
-        json_path,
-        bin_path,
-        version: exported_json.version.clone(),
-        num_constraints: exported_json.constraints.len(),
-        json_bin_match: exported_json == exported_bin,
-    })
+    export_r1cs_bundle(&transformed.optimized, &format!("data/{}_rms", stem))
 }
 
 pub fn run(path: &str) {
@@ -399,6 +377,30 @@ pub fn run(path: &str) {
         origin: generated.imported.normalized_r1cs.origin.clone(),
     };
     print_constraints(&preview);
+}
+
+pub fn run_with_args(args: &[String]) -> Result<(), String> {
+    if args
+        .iter()
+        .any(|arg| matches!(arg.as_str(), "--help" | "-h"))
+    {
+        return Err(usage_text().to_string());
+    }
+
+    match args {
+        [path] => {
+            run(path);
+            Ok(())
+        }
+        _ => Err(usage_text().to_string()),
+    }
+}
+
+fn usage_text() -> &'static str {
+    "\
+用法:
+  cargo run -- circom <constraints.json|circuit.r1cs|circuit.circom>
+  cargo run --example circom_json -- <constraints.json|circuit.r1cs|circuit.circom>"
 }
 
 fn print_generation_summary(generated: &GeneratedCircom) {

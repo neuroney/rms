@@ -1,87 +1,85 @@
 # RMS Toolkit
 
-Hand-built R1CS/RMS playground for:
+This repository focuses on one job: generate RMS-compatible `.bin` artifacts.
 
-- constructing small circuits directly in Rust
-- importing Circom JSON and binary `.r1cs` artifacts
-- executing witness assignments against normalized circuits
-- applying the Choudhuri transform and CSE optimization
-- exporting RMS-compatible linear circuits to JSON and BIN
-- generating production-style RMS benchmark fixtures and polynomial circuits
-
-The project is library-first: reusable logic lives in `src/`, runnable demos live in Cargo's root-level `examples/`, and generator tools live in `src/bin/`.
+It exposes a small set of top-level circuit modules, while keeping shared R1CS and
+export machinery reusable from the library.
 
 ## Project Layout
 
 ```text
 src/
   lib.rs            # crate entrypoint
-  circuits/         # hand-built circuit generators
-  generators/       # imported production RMS fixture generators
-  pipelines/        # demo pipelines used by CLI and examples
-  bin/              # standalone generator binaries
   cli.rs            # command-line dispatch
-  circom_json.rs    # Circom import pipeline internals
+  circom.rs         # public Circom import + transform workflow
+  circom_reader.rs  # Circom parsing/import internals
+  matrix_mul.rs     # matrix multiplication demo + API
+  greater_than.rs   # greater-than demo + API
+  random_mul.rs     # random RMS multiplication-chain demo + API
+  random_linear.rs  # random RMS linear-chain demo + API
+  dense_poly.rs     # dense polynomial demo + API
   evalr1cs.rs       # circuit execution and verification
   export.rs         # JSON/BIN export helpers
-  r1cs.rs           # circuit data structures and hand-built generators
+  r1cs.rs           # shared circuit data structures
   transform.rs      # Choudhuri transform and CSE
   utils.rs          # shared formatting and field helpers
-examples/           # Cargo examples (recommended modern Rust layout)
-data/generated/     # generated RMS benchmark artifacts (gitignored)
+data/               # exported artifacts and reusable generated outputs
 fixtures/           # checked-in Circom inputs and example artifacts
 scripts/            # Circom batch and R1CS analysis helpers
-docs/               # repository structure and migration notes
+docs/               # repository structure notes
 ```
 
 Public API is organized under:
 
-- `zkbench::r1cs`
-- `zkbench::circuits`
-- `zkbench::circom_json`
-- `zkbench::evalr1cs`
+- `zkbench::circom`
+- `zkbench::matrix_mul`
+- `zkbench::greater_than`
+- `zkbench::random_mul`
+- `zkbench::random_linear`
+- `zkbench::dense_poly`
 - `zkbench::export`
-- `zkbench::generators`
-- `zkbench::pipelines`
+- `zkbench::evalr1cs`
+- `zkbench::r1cs`
 - `zkbench::transform`
 - `zkbench::utils`
 
-`docs/repository-layout.md` records how the imported source code maps onto the active repository layout.
+## Commands
 
-## Examples
+The repository centers on these 6 CLI commands:
 
-The repository currently ships these demo pipelines:
-
-- `matrix_mul`: hand-built matrix multiplication circuit
-- `greater_than`: hand-built secure integer comparison circuit
-- `random`: synthetic RMS/R1CS transformation experiments
-- `circom <path>`: import a Circom constraints JSON or binary `.r1cs` file
+- `circom`: read a Circom constraints JSON, binary `.r1cs`, or `.circom` source and convert it to RMS
+- `greater_than`: hand-written greater-than circuit exported as RMS
+- `matrix_mul`: hand-written matrix multiplication circuit exported as RMS
+- `random_mul`: directly sampled RMS multiplication chain
+- `random_linear`: directly sampled RMS linear circuit
+- `dense_poly`: dense multivariate polynomial compiled into RMS
 
 ## CLI Usage
 
 ```bash
 cargo run
-cargo run -- matrix_mul
-cargo run -- greater_than
-cargo run -- random
+cargo run -- matrix_mul 6
+cargo run -- matrix_mul 4 8 6
+cargo run -- greater_than 16
+cargo run -- random_mul 8 128
+cargo run -- random_linear 8 128
+cargo run -- dense_poly 6 3
 cargo run -- circom fixtures/circomlib_and_o0.json
-cargo run --example matrix_mul
-cargo run --example greater_than
-cargo run --example random_rms
-cargo run --example circom_json -- fixtures/circomlib_and_o0.json
-cargo run --bin gen_rms_linear
-cargo run --bin gen_rms_mul
-cargo run --bin gen_rms_poly json
-RMS_POLY_FULL_MAX_DEGREE=7 cargo run --bin gen_rms_poly_full bin
 ```
 
-`cargo run` defaults to the matrix multiplication example.
+`cargo run` defaults to the matrix multiplication command.
 
-Generator outputs are written to `data/generated/` by default.
+Parameter summary:
+
+- `matrix_mul`: `dim` or `rows shared cols`
+- `greater_than`: `bit`
+- `random_mul`: `num_inputs num_constraints`
+- `random_linear`: `num_inputs num_constraints`
+- `dense_poly`: `num_vars degree`
+
+Commands export `.json` and `.bin` files under `data/`.
 
 ## Development
-
-Format and test locally with:
 
 ```bash
 cargo fmt
@@ -90,9 +88,7 @@ cargo test -- --nocapture
 
 ## Notes
 
-- Generated export artifacts are written under `target/`.
-- Benchmark fixture generators write to `data/generated/`.
+- CLI export artifacts are written under `data/`.
 - Circom fixture batch runs are orchestrated by `scripts/run_fixture_circom_batch.sh`.
 - R1CS inspection helpers live in `scripts/analyze_r1cs.py` and `scripts/compare_circuits.py`.
 - Node dependencies in `package.json` are only needed for Circom/snarkjs-based fixture workflows.
-- Reusable library modules belong under `src/`; modern Rust examples are root-level `examples/`; executable tools belong in `src/bin/`.

@@ -12,6 +12,15 @@ pub enum OutputFormat {
     Bin,
 }
 
+#[derive(Clone, Debug)]
+pub struct WrittenArtifacts {
+    pub json_path: String,
+    pub bin_path: String,
+    pub version: String,
+    pub num_constraints: usize,
+    pub json_bin_match: bool,
+}
+
 impl OutputFormat {
     pub fn parse(raw: &str) -> Result<Self, String> {
         match raw {
@@ -72,6 +81,44 @@ pub fn load_r1cs_from_json<P: AsRef<Path>>(path: P) -> Result<RmsLinearExport, B
 
 pub fn load_r1cs_from_bin<P: AsRef<Path>>(path: P) -> Result<RmsLinearExport, Box<dyn Error>> {
     load_bin_file(path)
+}
+
+pub fn export_r1cs_bundle(
+    r1cs: &R1CS,
+    export_stem: &str,
+) -> Result<WrittenArtifacts, Box<dyn Error>> {
+    let json_path = format!("{}.json", export_stem);
+    let bin_path = format!("{}.bin", export_stem);
+
+    export_r1cs_to_json(r1cs, &json_path)?;
+    export_r1cs_to_bin(r1cs, &bin_path)?;
+
+    summarize_written_artifacts(json_path, bin_path)
+}
+
+pub fn write_export_bundle(
+    export_stem: &str,
+    export: &RmsLinearExport,
+) -> Result<WrittenArtifacts, Box<dyn Error>> {
+    let json_path = format!("{}.json", export_stem);
+    let bin_path = format!("{}.bin", export_stem);
+
+    write_r1cs(&json_path, export, OutputFormat::Json)?;
+    write_r1cs(&bin_path, export, OutputFormat::Bin)?;
+
+    summarize_written_artifacts(json_path, bin_path)
+}
+
+pub fn print_export_constraints_preview(export: &RmsLinearExport, limit: usize) {
+    for constraint in export.constraints.iter().take(limit) {
+        println!(
+            "    step {:>2}: ({} ) * ({} ) -> w{}",
+            constraint.index,
+            terms_to_export_string(&constraint.a_in, "x"),
+            terms_to_export_string(&constraint.b_wit, "w"),
+            constraint.output_witness
+        );
+    }
 }
 
 impl RmsLinearExport {
@@ -180,10 +227,29 @@ fn format_term(term: &Term, prefix: &str) -> String {
     }
 }
 
+fn summarize_written_artifacts(
+    json_path: String,
+    bin_path: String,
+) -> Result<WrittenArtifacts, Box<dyn Error>> {
+    let exported_json = load_r1cs_from_json(&json_path)?;
+    let exported_bin = load_r1cs_from_bin(&bin_path)?;
+
+    Ok(WrittenArtifacts {
+        version: exported_json.version.clone(),
+        num_constraints: exported_json.constraints.len(),
+        json_bin_match: exported_json == exported_bin,
+        json_path,
+        bin_path,
+    })
+}
+
 pub(crate) fn write_json_pretty_file<T: Serialize, P: AsRef<Path>>(
     path: P,
     value: &T,
 ) -> Result<(), Box<dyn Error>> {
+    let path = path.as_ref();
+    ensure_parent_dir(path)?;
+
     let json = serde_json::to_string_pretty(value)?;
     let mut file = fs::File::create(path)?;
     file.write_all(json.as_bytes())?;
@@ -195,6 +261,9 @@ pub(crate) fn write_bin_file<T: Serialize, P: AsRef<Path>>(
     path: P,
     value: &T,
 ) -> Result<(), Box<dyn Error>> {
+    let path = path.as_ref();
+    ensure_parent_dir(path)?;
+
     let encoded = bincode::serialize(value)?;
     fs::write(path, encoded)?;
     Ok(())
@@ -214,4 +283,13 @@ pub(crate) fn load_bin_file<T: DeserializeOwned, P: AsRef<Path>>(
     let bytes = fs::read(path)?;
     let value = bincode::deserialize(&bytes)?;
     Ok(value)
+}
+
+fn ensure_parent_dir(path: &Path) -> Result<(), Box<dyn Error>> {
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent)?;
+        }
+    }
+    Ok(())
 }

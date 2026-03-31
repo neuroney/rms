@@ -141,12 +141,3 @@ pub fn verify_assignment(r1cs: &R1CS, assignment: &Assignment) -> bool {
     }
     all_ok
 }
-
-pub fn get_output(r1cs: &R1CS, assignment: &Assignment) -> Option<Fr> {
-    // 找到 constraints 里最后一个输出 witness 的值
-    let last_constraint = r1cs.constraints.last()?;
-    match &last_constraint.c.terms[..] {
-        [(_, Variable::Witness(out_idx))] => assignment.witnesses.get(out_idx).copied(),
-        _ => assignment.eval_lincomb(&last_constraint.c),
-    }
-}

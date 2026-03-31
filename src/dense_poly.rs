@@ -1,24 +1,11 @@
-use crate::export::{write_r1cs, OutputFormat};
+use crate::export::{print_export_constraints_preview, write_export_bundle};
 use crate::r1cs::{ExportConstraint, RmsLinearExport, Term};
-use rand::{rngs::StdRng, seq::SliceRandom, Rng, SeedableRng};
+use rand::{rngs::StdRng, Rng, SeedableRng};
 use std::collections::BTreeMap;
-use std::fs;
-use std::path::{Path, PathBuf};
 
-pub const DEFAULT_SPARSE_NUM_VARS: usize = 4;
-pub const DEFAULT_SPARSE_NUM_TERMS: usize = 8;
-pub const DEFAULT_SPARSE_MAX_TOTAL_DEGREE: usize = 4;
-pub const DEFAULT_SPARSE_MAX_SUPPORT: usize = 3;
-pub const DEFAULT_BASE_SEED: u64 = 42;
-
-pub const DEFAULT_FULL_NUM_VARS: usize = 5;
-pub const DEFAULT_FULL_MIN_DEGREE: usize = 6;
-pub const DEFAULT_FULL_MAX_DEGREE: usize = 10;
-pub const DEFAULT_FULL_NUM_VARS_ENV: &str = "RMS_POLY_FULL_NUM_VARS";
-pub const DEFAULT_FULL_MIN_DEGREE_ENV: &str = "RMS_POLY_FULL_MIN_DEGREE";
-pub const DEFAULT_FULL_MAX_DEGREE_ENV: &str = "RMS_POLY_FULL_MAX_DEGREE";
-pub const DEFAULT_FULL_OUT_DIR_ENV: &str = "RMS_POLY_FULL_OUT_DIR";
-pub const DEFAULT_FULL_SEED_ENV: &str = "RMS_POLY_FULL_SEED";
+pub const DEFAULT_NUM_VARS: usize = 5;
+pub const DEFAULT_MAX_DEGREE: usize = 4;
+pub const DEFAULT_SEED: u64 = 42;
 
 pub const SMALL_COEFF_POOL: &[i64] = &[-3, -2, -1, 1, 2, 3];
 
@@ -34,28 +21,30 @@ pub struct RmsMultivariatePolynomial {
     pub terms: Vec<RmsMonomial>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PolyFullBatchConfig {
-    pub out_dir: PathBuf,
+#[derive(Clone, Debug)]
+pub struct DensePolyRunConfig {
     pub num_vars: usize,
-    pub min_degree: usize,
     pub max_degree: usize,
-    pub base_seed: u64,
+    pub seed: u64,
+    pub export_stem: String,
 }
 
-impl PolyFullBatchConfig {
-    pub fn from_env(default_out_dir: &Path) -> Result<Self, String> {
-        Ok(Self {
-            out_dir: env_path(DEFAULT_FULL_OUT_DIR_ENV, default_out_dir)?,
-            num_vars: env_usize(DEFAULT_FULL_NUM_VARS_ENV, DEFAULT_FULL_NUM_VARS)?,
-            min_degree: env_usize(DEFAULT_FULL_MIN_DEGREE_ENV, DEFAULT_FULL_MIN_DEGREE)?,
-            max_degree: env_usize(DEFAULT_FULL_MAX_DEGREE_ENV, DEFAULT_FULL_MAX_DEGREE)?,
-            base_seed: env_u64(DEFAULT_FULL_SEED_ENV, DEFAULT_BASE_SEED)?,
-        })
+impl DensePolyRunConfig {
+    pub fn demo() -> Self {
+        Self::new(DEFAULT_NUM_VARS, DEFAULT_MAX_DEGREE, DEFAULT_SEED)
+    }
+
+    pub fn new(num_vars: usize, max_degree: usize, seed: u64) -> Self {
+        Self {
+            num_vars,
+            max_degree,
+            seed,
+            export_stem: format!("data/dense_poly_n{}_d{}_rms", num_vars, max_degree),
+        }
     }
 }
 
-pub fn sample_small_coeff<R: Rng>(rng: &mut R) -> i64 {
+fn sample_small_coeff<R: Rng>(rng: &mut R) -> i64 {
     let idx = rng.gen_range(0..SMALL_COEFF_POOL.len());
     SMALL_COEFF_POOL[idx]
 }
@@ -255,77 +244,6 @@ pub fn compile_poly_to_rms_horner(poly: &RmsMultivariatePolynomial) -> (RmsLinea
     (compiler.into_export(), output_witness)
 }
 
-fn random_positive_partition<R: Rng>(rng: &mut R, total: usize, parts: usize) -> Vec<usize> {
-    assert!(parts >= 1);
-    assert!(total >= parts);
-
-    if parts == 1 {
-        return vec![total];
-    }
-
-    let mut cuts: Vec<usize> = (1..total).collect();
-    cuts.shuffle(rng);
-    cuts.truncate(parts - 1);
-    cuts.sort_unstable();
-
-    let mut out = Vec::with_capacity(parts);
-    let mut prev = 0usize;
-    for cut in cuts {
-        out.push(cut - prev);
-        prev = cut;
-    }
-    out.push(total - prev);
-    out
-}
-
-pub fn sample_sparse_multivariate_poly<R: Rng>(
-    num_vars: usize,
-    num_terms: usize,
-    max_total_degree: usize,
-    max_support: usize,
-    rng: &mut R,
-) -> RmsMultivariatePolynomial {
-    assert!(num_vars >= 1);
-    assert!(num_terms >= 1);
-    assert!(max_support >= 1);
-
-    let mut merged: BTreeMap<Vec<usize>, i64> = BTreeMap::new();
-
-    for _ in 0..num_terms {
-        let coeff = sample_small_coeff(rng);
-        let total_degree = rng.gen_range(0..=max_total_degree);
-        let mut exponents = vec![0usize; num_vars];
-
-        if total_degree > 0 {
-            let support = rng.gen_range(1..=max_support.min(num_vars).min(total_degree));
-            let mut vars: Vec<usize> = (0..num_vars).collect();
-            vars.shuffle(rng);
-            vars.truncate(support);
-            vars.sort_unstable();
-
-            let pieces = random_positive_partition(rng, total_degree, support);
-            for (var_idx, degree) in vars.into_iter().zip(pieces.into_iter()) {
-                exponents[var_idx] = degree;
-            }
-        }
-
-        *merged.entry(exponents).or_insert(0) += coeff;
-    }
-
-    let terms = merged
-        .into_iter()
-        .filter_map(|(exponents, coeff)| {
-            if coeff == 0 {
-                None
-            } else {
-                Some(RmsMonomial { coeff, exponents })
-            }
-        })
-        .collect();
-
-    RmsMultivariatePolynomial { num_vars, terms }
-}
-
 fn checked_coeff_count(num_vars: usize, max_degree: usize) -> Result<usize, String> {
     let base = max_degree.checked_add(1).ok_or_else(|| {
         format!("max_degree overflowed when computing coefficient count: {max_degree}")
@@ -378,151 +296,78 @@ pub fn sample_full_multivariate_poly<R: Rng>(
     Ok(RmsMultivariatePolynomial { num_vars, terms })
 }
 
-pub fn generate_sparse_fixture<P: AsRef<Path>>(
-    out_dir: P,
-    num_vars: usize,
-    num_terms: usize,
-    max_total_degree: usize,
-    max_support: usize,
-    seed: u64,
-    format: OutputFormat,
-) -> Result<(), String> {
-    let out_dir = out_dir.as_ref();
-    fs::create_dir_all(out_dir)
-        .map_err(|err| format!("failed to create output dir {}: {err}", out_dir.display()))?;
+pub fn run() {
+    run_with_args(&[]).expect("稠密多项式示例失败");
+}
 
-    let mut rng = StdRng::seed_from_u64(seed);
-    let poly = sample_sparse_multivariate_poly(
-        num_vars,
-        num_terms,
-        max_total_degree,
-        max_support,
-        &mut rng,
-    );
-    let (r1cs, _output_witness) = compile_poly_to_rms_horner(&poly);
+pub fn run_with_args(args: &[String]) -> Result<(), String> {
+    if args
+        .iter()
+        .any(|arg| matches!(arg.as_str(), "--help" | "-h"))
+    {
+        return Err(usage_text().to_string());
+    }
 
-    let stem = format!(
-        "rms_poly_n{}_t{}_d{}",
-        num_vars, num_terms, max_total_degree
-    );
-    let path = out_dir.join(format!("{}.{}", stem, format.extension()));
-    write_r1cs(&path, &r1cs, format).map_err(|err| err.to_string())?;
+    let config = match args {
+        [] => DensePolyRunConfig::demo(),
+        [num_vars, max_degree] => DensePolyRunConfig::new(
+            parse_usize_arg("num_vars", num_vars)?,
+            parse_usize_arg("degree", max_degree)?,
+            DEFAULT_SEED,
+        ),
+        _ => return Err(usage_text().to_string()),
+    };
 
-    println!(
-        "wrote {}",
-        std::fs::canonicalize(&path)
-            .unwrap_or(path.clone())
-            .display()
-    );
+    run_with_config(config)
+}
+
+fn run_with_config(config: DensePolyRunConfig) -> Result<(), String> {
+    let mut rng = StdRng::seed_from_u64(config.seed);
+    let poly = sample_full_multivariate_poly(config.num_vars, config.max_degree, &mut rng)
+        .map_err(|err| format!("生成稠密多项式失败: {err}"))?;
+    let coeff_count = poly.terms.len();
+    let (export, output_witness) = compile_poly_to_rms_horner(&poly);
+    let report = write_export_bundle(&config.export_stem, &export)
+        .map_err(|err| format!("导出稠密多项式 RMS 电路失败: {err}"))?;
+
+    println!("\n╔══════════════════════════════════════════════════╗");
+    println!("║  稠密多项式：Horner 编译为 RMS 线性电路          ║");
+    println!("╚══════════════════════════════════════════════════╝\n");
+    println!("  变量数: {}", config.num_vars);
+    println!("  最大次数: {}", config.max_degree);
+    println!("  系数数: {}", coeff_count);
+    println!("  输出 witness: w{}", output_witness);
+    println!("  约束数: {}", export.constraints.len());
+    println!("  witness 数: {}", export.num_witnesses);
+    println!("  JSON: {}", report.json_path);
+    println!("  BIN:  {}", report.bin_path);
+    println!("  版本: {}", report.version);
+    println!("  JSON/BIN 内容一致: {}", report.json_bin_match);
+    println!("  前 8 条 RMS 约束:");
+    print_export_constraints_preview(&export, 8);
 
     Ok(())
 }
 
-pub fn generate_default_sparse_fixture<P: AsRef<Path>>(
-    out_dir: P,
-    format: OutputFormat,
-) -> Result<(), String> {
-    generate_sparse_fixture(
-        out_dir,
-        DEFAULT_SPARSE_NUM_VARS,
-        DEFAULT_SPARSE_NUM_TERMS,
-        DEFAULT_SPARSE_MAX_TOTAL_DEGREE,
-        DEFAULT_SPARSE_MAX_SUPPORT,
-        DEFAULT_BASE_SEED,
-        format,
-    )
+fn parse_usize_arg(name: &str, raw: &str) -> Result<usize, String> {
+    raw.parse::<usize>()
+        .map_err(|err| format!("{name} 必须是非负整数，收到 {raw:?}: {err}"))
 }
 
-pub fn generate_full_batch_suite(
-    config: &PolyFullBatchConfig,
-    format: OutputFormat,
-) -> Result<(), String> {
-    if config.min_degree > config.max_degree {
-        return Err(format!(
-            "min_degree must be <= max_degree, got {} > {}",
-            config.min_degree, config.max_degree
-        ));
-    }
+fn usage_text() -> &'static str {
+    "\
+用法:
+  cargo run -- dense_poly
+  cargo run -- dense_poly <num_vars> <degree>
+  cargo run --example dense_poly -- <num_vars> <degree>
 
-    fs::create_dir_all(&config.out_dir).map_err(|err| {
-        format!(
-            "failed to create output dir {}: {err}",
-            config.out_dir.display()
-        )
-    })?;
-
-    for degree in config.min_degree..=config.max_degree {
-        let coeff_count = checked_coeff_count(config.num_vars, degree)?;
-        let seed = config.base_seed.wrapping_add(degree as u64);
-        let mut rng = StdRng::seed_from_u64(seed);
-
-        let poly = sample_full_multivariate_poly(config.num_vars, degree, &mut rng)?;
-        let (r1cs, _output_witness) = compile_poly_to_rms_horner(&poly);
-
-        let filename = format!(
-            "rms_poly_full_k{}_m{}.{}",
-            config.num_vars,
-            degree,
-            format.extension()
-        );
-        let path = config.out_dir.join(filename);
-        write_r1cs(&path, &r1cs, format).map_err(|err| err.to_string())?;
-
-        println!(
-            "wrote {} (coeffs={}, constraints={}, witnesses={})",
-            std::fs::canonicalize(&path)
-                .unwrap_or(path.clone())
-                .display(),
-            coeff_count,
-            r1cs.constraints.len(),
-            r1cs.num_witnesses
-        );
-    }
-
-    Ok(())
-}
-
-fn env_usize(name: &str, default: usize) -> Result<usize, String> {
-    match std::env::var(name) {
-        Ok(raw) => raw
-            .parse::<usize>()
-            .map_err(|err| format!("failed to parse {name}={raw:?} as usize: {err}")),
-        Err(std::env::VarError::NotPresent) => Ok(default),
-        Err(err) => Err(format!("failed to read env var {name}: {err}")),
-    }
-}
-
-fn env_u64(name: &str, default: u64) -> Result<u64, String> {
-    match std::env::var(name) {
-        Ok(raw) => raw
-            .parse::<u64>()
-            .map_err(|err| format!("failed to parse {name}={raw:?} as u64: {err}")),
-        Err(std::env::VarError::NotPresent) => Ok(default),
-        Err(err) => Err(format!("failed to read env var {name}: {err}")),
-    }
-}
-
-fn env_path(name: &str, default: &Path) -> Result<PathBuf, String> {
-    match std::env::var(name) {
-        Ok(raw) => Ok(PathBuf::from(raw)),
-        Err(std::env::VarError::NotPresent) => Ok(default.to_path_buf()),
-        Err(err) => Err(format!("failed to read env var {name}: {err}")),
-    }
+说明:
+  默认值: num_vars=5, degree=4"
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn sparse_poly_keeps_requested_shape() {
-        let mut rng = StdRng::seed_from_u64(11);
-        let poly = sample_sparse_multivariate_poly(4, 8, 5, 3, &mut rng);
-
-        assert_eq!(poly.num_vars, 4);
-        assert!(!poly.terms.is_empty());
-        assert!(poly.terms.iter().all(|term| term.exponents.len() == 4));
-    }
 
     #[test]
     fn horner_compiler_materializes_output() {
