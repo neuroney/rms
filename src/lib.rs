@@ -4,7 +4,8 @@
 //!
 //! Public API is organized into:
 //! - [`circom`]: import Circom-authored circuits and transform them into RMS.
-//! - [`matrix_mul`], [`greater_than`], [`random_mul`], [`random_linear`], [`dense_poly`]:
+//! - [`matrix_mul`], [`greater_than`], [`page_rank`], [`random_mul`], [`random_linear`],
+//!   [`dense_poly`]:
 //!   canonical circuit modules and runnable demos.
 //! - [`evalr1cs`]: witness execution and verification helpers.
 //! - [`export`]: JSON/BIN import-export helpers.
@@ -18,6 +19,7 @@ pub mod evalr1cs;
 pub mod export;
 pub mod greater_than;
 pub mod matrix_mul;
+pub mod page_rank;
 pub mod r1cs;
 pub mod random_linear;
 pub mod random_mul;

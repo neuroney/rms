@@ -24,9 +24,23 @@ pub struct ExportConstraint {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PublicInputValue {
+    pub index: usize,
+    pub value: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RmsLinearExport {
     pub version: String,
     pub num_inputs: usize,
+    #[serde(default)]
+    pub num_public_inputs: usize,
+    #[serde(default)]
+    pub num_private_inputs: usize,
+    #[serde(default)]
+    pub public_inputs: Vec<PublicInputValue>,
+    #[serde(default)]
+    pub private_inputs: Vec<usize>,
     pub num_witnesses: usize,
     pub execution_order: Vec<usize>,
     pub constraints: Vec<ExportConstraint>,

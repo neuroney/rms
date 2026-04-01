@@ -1,4 +1,4 @@
-use crate::export::{print_export_constraints_preview, write_export_bundle};
+use crate::export::{build_rms_export_v2, print_export_constraints_preview, write_export_bundle, ExportInputConfig};
 use crate::r1cs::{ExportConstraint, RmsLinearExport, Term};
 use rand::{rngs::StdRng, Rng, SeedableRng};
 
@@ -64,13 +64,13 @@ pub fn build_random_rms<R: Rng>(
         });
     }
 
-    Ok(RmsLinearExport {
-        version: "rms-linear-v1".to_string(),
+    build_rms_export_v2(
         num_inputs,
         num_witnesses,
         execution_order,
         constraints,
-    })
+        &ExportInputConfig::all_private(num_inputs),
+    )
 }
 
 pub fn run() {
@@ -145,9 +145,13 @@ mod tests {
         let mut rng = StdRng::seed_from_u64(9);
         let export = build_random_rms(5, 8, &mut rng).expect("mul export");
 
-        assert_eq!(export.version, "rms-linear-v1");
+        assert_eq!(export.version, "rms-linear-v2");
         assert_eq!(export.num_witnesses, 9);
         assert_eq!(export.constraints.len(), 8);
+        assert_eq!(export.num_public_inputs, 1);
+        assert_eq!(export.public_inputs[0].index, 0);
+        assert_eq!(export.public_inputs[0].value, "1");
+        assert_eq!(export.num_private_inputs, 4);
 
         for (index, constraint) in export.constraints.iter().enumerate() {
             assert_eq!(constraint.index, index);

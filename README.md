@@ -15,6 +15,7 @@ src/
   circom_reader.rs  # Circom parsing/import internals
   matrix_mul.rs     # matrix multiplication demo + API
   greater_than.rs   # greater-than demo + API
+  page_rank.rs      # sparse PageRank demo + API
   random_mul.rs     # random RMS multiplication-chain demo + API
   random_linear.rs  # random RMS linear-chain demo + API
   dense_poly.rs     # dense polynomial demo + API
@@ -34,6 +35,7 @@ Public API is organized under:
 - `rmsgen::circom`
 - `rmsgen::matrix_mul`
 - `rmsgen::greater_than`
+- `rmsgen::page_rank`
 - `rmsgen::random_mul`
 - `rmsgen::random_linear`
 - `rmsgen::dense_poly`
@@ -45,11 +47,12 @@ Public API is organized under:
 
 ## Commands
 
-The repository centers on these 6 CLI commands:
+The repository centers on these 7 CLI commands:
 
 - `circom`: read a Circom constraints JSON, binary `.r1cs`, or `.circom` source and convert it to RMS
 - `greater_than`: hand-written greater-than circuit exported as RMS
 - `matrix_mul`: hand-written matrix multiplication circuit exported as RMS
+- `page_rank`: hand-written fixed-iteration PageRank circuit exported as RMS
 - `random_mul`: directly sampled RMS multiplication chain
 - `random_linear`: directly sampled RMS linear circuit
 - `dense_poly`: dense multivariate polynomial compiled into RMS
@@ -61,6 +64,7 @@ cargo run
 cargo run -- matrix_mul 6
 cargo run -- matrix_mul 4 8 6
 cargo run -- greater_than 16
+cargo run -- page_rank 8
 cargo run -- random_mul 8 128
 cargo run -- random_linear 8 128
 cargo run -- dense_poly 6 3
@@ -73,6 +77,7 @@ Parameter summary:
 
 - `matrix_mul`: `dim` or `rows shared cols`
 - `greater_than`: `bit`
+- `page_rank`: `iterations`
 - `random_mul`: `num_inputs num_constraints`
 - `random_linear`: `num_inputs num_constraints`
 - `dense_poly`: `num_vars degree`
@@ -89,6 +94,8 @@ cargo test -- --nocapture
 ## Notes
 
 - CLI export artifacts are written under `data/`.
+- `page_rank` keeps the Google matrix sparse in the circuit by compiling
+  edge propagation, dangling-mass handling, and teleportation as separate RMS steps.
 - Circom fixture batch runs are orchestrated by `scripts/run_fixture_circom_batch.sh`.
 - R1CS inspection helpers live in `scripts/analyze_r1cs.py` and `scripts/compare_circuits.py`.
 - Node dependencies in `package.json` are only needed for Circom/snarkjs-based fixture workflows.

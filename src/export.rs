@@ -1,6 +1,10 @@
-use crate::r1cs::{ExportConstraint, LinComb, RmsLinearExport, Term, Variable, R1CS};
-use ark_ff::PrimeField;
-use serde::{de::DeserializeOwned, Serialize};
+use crate::r1cs::{
+    ExportConstraint, LinComb, PublicInputValue, R1CS, RmsLinearExport, Term, Variable,
+};
+use ark_bn254::Fr;
+use ark_ff::{One, PrimeField};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fs;
 use std::io::Write;
@@ -19,6 +23,20 @@ pub struct WrittenArtifacts {
     pub version: String,
     pub num_constraints: usize,
     pub json_bin_match: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct ExportInputConfig {
+    public_inputs: Vec<(usize, Fr)>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct LegacyRmsLinearExportV1 {
+    version: String,
+    num_inputs: usize,
+    num_witnesses: usize,
+    execution_order: Vec<usize>,
+    constraints: Vec<ExportConstraint>,
 }
 
 impl OutputFormat {
@@ -40,13 +58,98 @@ impl OutputFormat {
     }
 }
 
+impl ExportInputConfig {
+    pub fn all_private(num_inputs: usize) -> Self {
+        let mut public_inputs = Vec::new();
+        if num_inputs > 0 {
+            public_inputs.push((0, Fr::one()));
+        }
+
+        Self { public_inputs }
+    }
+
+    pub fn from_public_values(
+        num_inputs: usize,
+        public_inputs: Vec<(usize, Fr)>,
+    ) -> Result<Self, String> {
+        let config = Self { public_inputs };
+        let _ = config.materialize(num_inputs)?;
+        Ok(config)
+    }
+
+    fn materialize(
+        &self,
+        num_inputs: usize,
+    ) -> Result<(Vec<PublicInputValue>, Vec<usize>), String> {
+        let mut public_by_index = BTreeMap::new();
+        if num_inputs > 0 {
+            public_by_index.insert(0usize, Fr::one());
+        }
+
+        for &(index, value) in &self.public_inputs {
+            if index >= num_inputs {
+                return Err(format!(
+                    "public input x{} 超出输入范围 [0, {})",
+                    index, num_inputs
+                ));
+            }
+            if index == 0 && value != Fr::one() {
+                return Err("x0 必须固定为 1，不能覆写为其他 public value".to_string());
+            }
+
+            match public_by_index.insert(index, value) {
+                Some(existing) if existing != value => {
+                    return Err(format!("public input x{} 出现冲突的重复赋值", index));
+                }
+                _ => {}
+            }
+        }
+
+        let public_inputs = public_by_index
+            .into_iter()
+            .map(|(index, value)| PublicInputValue {
+                index,
+                value: value.into_bigint().to_string(),
+            })
+            .collect::<Vec<_>>();
+
+        let public_index_set = public_inputs
+            .iter()
+            .map(|input| input.index)
+            .collect::<BTreeSet<_>>();
+        let private_inputs = (0..num_inputs)
+            .filter(|index| !public_index_set.contains(index))
+            .collect::<Vec<_>>();
+
+        Ok((public_inputs, private_inputs))
+    }
+}
+
 pub fn export_r1cs_to_json<P: AsRef<Path>>(r1cs: &R1CS, path: P) -> Result<(), Box<dyn Error>> {
     let exported = RmsLinearExport::from_r1cs(r1cs)?;
     write_r1cs_json(path, &exported)
 }
 
+pub fn export_r1cs_to_json_with_inputs<P: AsRef<Path>>(
+    r1cs: &R1CS,
+    path: P,
+    input_config: &ExportInputConfig,
+) -> Result<(), Box<dyn Error>> {
+    let exported = RmsLinearExport::from_r1cs_with_inputs(r1cs, input_config)?;
+    write_r1cs_json(path, &exported)
+}
+
 pub fn export_r1cs_to_bin<P: AsRef<Path>>(r1cs: &R1CS, path: P) -> Result<(), Box<dyn Error>> {
     let exported = RmsLinearExport::from_r1cs(r1cs)?;
+    write_r1cs_bin(path, &exported)
+}
+
+pub fn export_r1cs_to_bin_with_inputs<P: AsRef<Path>>(
+    r1cs: &R1CS,
+    path: P,
+    input_config: &ExportInputConfig,
+) -> Result<(), Box<dyn Error>> {
+    let exported = RmsLinearExport::from_r1cs_with_inputs(r1cs, input_config)?;
     write_r1cs_bin(path, &exported)
 }
 
@@ -76,11 +179,23 @@ pub fn write_r1cs<P: AsRef<Path>>(
 }
 
 pub fn load_r1cs_from_json<P: AsRef<Path>>(path: P) -> Result<RmsLinearExport, Box<dyn Error>> {
-    load_json_file(path)
+    let json = fs::read_to_string(path)?;
+    if let Ok(v2) = serde_json::from_str::<RmsLinearExport>(&json) {
+        return Ok(v2);
+    }
+
+    let legacy: LegacyRmsLinearExportV1 = serde_json::from_str(&json)?;
+    Ok(legacy.into())
 }
 
 pub fn load_r1cs_from_bin<P: AsRef<Path>>(path: P) -> Result<RmsLinearExport, Box<dyn Error>> {
-    load_bin_file(path)
+    let bytes = fs::read(path)?;
+    if let Ok(v2) = bincode::deserialize::<RmsLinearExport>(&bytes) {
+        return Ok(v2);
+    }
+
+    let legacy: LegacyRmsLinearExportV1 = bincode::deserialize(&bytes)?;
+    Ok(legacy.into())
 }
 
 pub fn export_r1cs_bundle(
@@ -92,6 +207,20 @@ pub fn export_r1cs_bundle(
 
     export_r1cs_to_json(r1cs, &json_path)?;
     export_r1cs_to_bin(r1cs, &bin_path)?;
+
+    summarize_written_artifacts(json_path, bin_path)
+}
+
+pub fn export_r1cs_bundle_with_inputs(
+    r1cs: &R1CS,
+    export_stem: &str,
+    input_config: &ExportInputConfig,
+) -> Result<WrittenArtifacts, Box<dyn Error>> {
+    let json_path = format!("{}.json", export_stem);
+    let bin_path = format!("{}.bin", export_stem);
+
+    export_r1cs_to_json_with_inputs(r1cs, &json_path, input_config)?;
+    export_r1cs_to_bin_with_inputs(r1cs, &bin_path, input_config)?;
 
     summarize_written_artifacts(json_path, bin_path)
 }
@@ -121,8 +250,37 @@ pub fn print_export_constraints_preview(export: &RmsLinearExport, limit: usize) 
     }
 }
 
+pub fn build_rms_export_v2(
+    num_inputs: usize,
+    num_witnesses: usize,
+    execution_order: Vec<usize>,
+    constraints: Vec<ExportConstraint>,
+    input_config: &ExportInputConfig,
+) -> Result<RmsLinearExport, String> {
+    let (public_inputs, private_inputs) = input_config.materialize(num_inputs)?;
+
+    Ok(RmsLinearExport {
+        version: "rms-linear-v2".to_string(),
+        num_inputs,
+        num_public_inputs: public_inputs.len(),
+        num_private_inputs: private_inputs.len(),
+        public_inputs,
+        private_inputs,
+        num_witnesses,
+        execution_order,
+        constraints,
+    })
+}
+
 impl RmsLinearExport {
     pub fn from_r1cs(r1cs: &R1CS) -> Result<Self, Box<dyn Error>> {
+        Self::from_r1cs_with_inputs(r1cs, &ExportInputConfig::all_private(r1cs.num_inputs))
+    }
+
+    pub fn from_r1cs_with_inputs(
+        r1cs: &R1CS,
+        input_config: &ExportInputConfig,
+    ) -> Result<Self, Box<dyn Error>> {
         let constraints = r1cs
             .constraints
             .iter()
@@ -130,13 +288,13 @@ impl RmsLinearExport {
             .map(|(index, constraint)| export_constraint(index, constraint))
             .collect::<Result<Vec<_>, _>>()?;
 
-        Ok(RmsLinearExport {
-            version: "rms-linear-v1".to_string(),
-            num_inputs: r1cs.num_inputs,
-            num_witnesses: r1cs.num_witnesses,
-            execution_order: (0..constraints.len()).collect(),
+        Ok(build_rms_export_v2(
+            r1cs.num_inputs,
+            r1cs.num_witnesses,
+            (0..constraints.len()).collect(),
             constraints,
-        })
+            input_config,
+        )?)
     }
 }
 
@@ -292,4 +450,22 @@ fn ensure_parent_dir(path: &Path) -> Result<(), Box<dyn Error>> {
         }
     }
     Ok(())
+}
+
+impl From<LegacyRmsLinearExportV1> for RmsLinearExport {
+    fn from(value: LegacyRmsLinearExportV1) -> Self {
+        let private_inputs = (0..value.num_inputs).collect::<Vec<_>>();
+
+        RmsLinearExport {
+            version: value.version,
+            num_inputs: value.num_inputs,
+            num_public_inputs: 0,
+            num_private_inputs: private_inputs.len(),
+            public_inputs: vec![],
+            private_inputs,
+            num_witnesses: value.num_witnesses,
+            execution_order: value.execution_order,
+            constraints: value.constraints,
+        }
+    }
 }
