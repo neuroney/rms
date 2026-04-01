@@ -5,7 +5,8 @@ pub use crate::circom_reader::{
 };
 use crate::evalr1cs::{execute_circuit, verify_assignment, Assignment};
 use crate::export::{
-    export_r1cs_bundle, load_r1cs_from_json, terms_to_export_string, WrittenArtifacts,
+    export_r1cs_bundle_with_inputs, load_r1cs_from_json, terms_to_export_string, ExportInputConfig,
+    WrittenArtifacts,
 };
 use crate::r1cs::R1CS;
 use crate::transform::{eliminate_common_subexpressions, try_choudhuri_transform, TransformResult};
@@ -274,7 +275,46 @@ pub fn export_circuit(
         .and_then(|stem| stem.to_str())
         .ok_or("Circom 路径没有可用文件名")?;
 
-    export_r1cs_bundle(&transformed.optimized, &format!("data/{}_rms", stem))
+    let input_config = build_export_input_config(generated)?;
+    export_r1cs_bundle_with_inputs(
+        &transformed.optimized,
+        &format!("data/{}_rms", stem),
+        &input_config,
+    )
+}
+
+fn build_export_input_config(
+    generated: &GeneratedCircom,
+) -> Result<ExportInputConfig, Box<dyn Error>> {
+    let num_inputs = generated.imported.normalized_r1cs.num_inputs;
+    if generated.imported.layout.public_input_signal_ids.is_empty() {
+        return Ok(ExportInputConfig::all_private(num_inputs));
+    }
+
+    let witness_values = load_reference_witness(generated)?.ok_or_else(|| {
+        "rms-linear-v2 导出需要 public input 的具体值；当前缺少 .wasm + input.json，无法生成 reference witness"
+            .to_string()
+    })?;
+
+    let public_inputs = generated
+        .imported
+        .layout
+        .public_input_signal_ids
+        .iter()
+        .map(|signal_id| {
+            let input_idx = generated.imported.input_signal_to_index[signal_id];
+            let value = *witness_values
+                .values
+                .get(*signal_id)
+                .ok_or_else(|| format!("witness 中缺少 public input signal {}", signal_id))?;
+            Ok((input_idx, value))
+        })
+        .collect::<Result<Vec<_>, Box<dyn Error>>>()?;
+
+    Ok(ExportInputConfig::from_public_values(
+        num_inputs,
+        public_inputs,
+    )?)
 }
 
 pub fn run(path: &str) {
@@ -297,7 +337,6 @@ pub fn run(path: &str) {
         }
     };
     let evaluation = evaluate_equivalence(&generated, &transformed);
-    let export = export_circuit(&generated, &transformed).expect("导出 Circom RMS 电路失败");
 
     println!("\n【2. 电路转换】");
     transformed.transformed.r1cs.print_stats();
@@ -345,6 +384,13 @@ pub fn run(path: &str) {
     }
 
     println!("\n【4. 电路导出】");
+    let export = match export_circuit(&generated, &transformed) {
+        Ok(export) => export,
+        Err(err) => {
+            println!("  导出失败: {}", err);
+            return;
+        }
+    };
     println!("  JSON: {}", export.json_path);
     println!("  BIN:  {}", export.bin_path);
     println!("  版本: {}", export.version);

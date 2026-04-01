@@ -1,9 +1,9 @@
 use crate::r1cs::{
-    ExportConstraint, LinComb, PublicInputValue, R1CS, RmsLinearExport, Term, Variable,
+    ExportConstraint, LinComb, PublicInputValue, RmsLinearExport, Term, Variable, R1CS,
 };
 use ark_bn254::Fr;
 use ark_ff::{One, PrimeField};
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fs;
@@ -425,22 +425,6 @@ pub(crate) fn write_bin_file<T: Serialize, P: AsRef<Path>>(
     let encoded = bincode::serialize(value)?;
     fs::write(path, encoded)?;
     Ok(())
-}
-
-pub(crate) fn load_json_file<T: DeserializeOwned, P: AsRef<Path>>(
-    path: P,
-) -> Result<T, Box<dyn Error>> {
-    let json = fs::read_to_string(path)?;
-    let value = serde_json::from_str(&json)?;
-    Ok(value)
-}
-
-pub(crate) fn load_bin_file<T: DeserializeOwned, P: AsRef<Path>>(
-    path: P,
-) -> Result<T, Box<dyn Error>> {
-    let bytes = fs::read(path)?;
-    let value = bincode::deserialize(&bytes)?;
-    Ok(value)
 }
 
 fn ensure_parent_dir(path: &Path) -> Result<(), Box<dyn Error>> {

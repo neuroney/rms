@@ -84,6 +84,12 @@ Parameter summary:
 
 Commands export `.json` and `.bin` files under `data/`.
 
+Current exports use `rms-linear-v2`, which records:
+
+- `public_inputs` with concrete field values
+- `private_inputs` as index metadata only
+- `x0 = 1` as a reserved public input
+
 ## Development
 
 ```bash
@@ -94,6 +100,10 @@ cargo test -- --nocapture
 ## Notes
 
 - CLI export artifacts are written under `data/`.
+- Hand-written demos export `x0 = 1` as the only default public input and mark the remaining
+  external inputs as private.
+- Circom exports preserve declared public/private inputs when the corresponding public values are
+  available from the reference witness flow.
 - `page_rank` keeps the Google matrix sparse in the circuit by compiling
   edge propagation, dangling-mass handling, and teleportation as separate RMS steps.
 - Circom fixture batch runs are orchestrated by `scripts/run_fixture_circom_batch.sh`.

@@ -1,4 +1,6 @@
-use crate::export::{build_rms_export_v2, print_export_constraints_preview, write_export_bundle, ExportInputConfig};
+use crate::export::{
+    build_rms_export_v2, print_export_constraints_preview, write_export_bundle, ExportInputConfig,
+};
 use crate::r1cs::{ExportConstraint, RmsLinearExport, Term};
 use rand::{rngs::StdRng, Rng, SeedableRng};
 

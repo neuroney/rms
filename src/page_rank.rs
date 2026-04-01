@@ -1,6 +1,7 @@
 use crate::evalr1cs::{execute_circuit, verify_assignment, Assignment};
 use crate::export::{
-    export_r1cs_bundle, load_r1cs_from_json, terms_to_export_string, WrittenArtifacts,
+    export_r1cs_bundle_with_inputs, load_r1cs_from_json, terms_to_export_string, ExportInputConfig,
+    WrittenArtifacts,
 };
 use crate::r1cs::{Constraint, LinComb, Variable, R1CS};
 use crate::transform::{choudhuri_transform, eliminate_common_subexpressions, TransformResult};
@@ -351,7 +352,11 @@ pub fn export_circuit(
     generated: &GeneratedPageRank,
     transformed: &TransformedPageRank,
 ) -> Result<PageRankExportReport, Box<dyn std::error::Error>> {
-    export_r1cs_bundle(&transformed.optimized, &generated.config.export_stem)
+    export_r1cs_bundle_with_inputs(
+        &transformed.optimized,
+        &generated.config.export_stem,
+        &ExportInputConfig::all_private(generated.circuit.r1cs.num_inputs),
+    )
 }
 
 pub fn run() {

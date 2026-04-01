@@ -5,7 +5,7 @@ use std::collections::HashMap;
 /// Represents variables in the constraint system.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Variable {
-    Input(usize),   // Public input, index starts from 0, x0 = 1
+    Input(usize),   // Input slot, index starts from 0; v2 exports reserve x0 = 1 as public
     Witness(usize), // Private witness, index starts from 1
 }
 
@@ -185,7 +185,7 @@ impl R1CS {
             ww,
             100.0 * ww as f64 / total as f64
         );
-        println!("  public inputs:   {}", self.num_inputs);
+        println!("  input slots:     {}", self.num_inputs);
         println!("  witnesses:       {}", self.num_witnesses);
     }
 }

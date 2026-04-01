@@ -393,8 +393,11 @@ mod tests {
         };
 
         let (export, output_witness) = compile_poly_to_rms_horner(&poly);
-        assert_eq!(export.version, "rms-linear-v1");
+        assert_eq!(export.version, "rms-linear-v2");
         assert!(export.num_inputs >= 3);
+        assert_eq!(export.num_public_inputs, 1);
+        assert_eq!(export.public_inputs[0].index, 0);
+        assert_eq!(export.public_inputs[0].value, "1");
         assert!(output_witness >= 1);
         assert!(!export.constraints.is_empty());
     }
