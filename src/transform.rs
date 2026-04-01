@@ -1,6 +1,8 @@
 use crate::r1cs::{Constraint, LinComb, Variable, R1CS};
 use crate::utils::{lincomb_to_string, var_to_string};
-use std::collections::HashMap;
+use ark_bn254::Fr;
+use ark_ff::{One, Zero};
+use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 
 const DEFAULT_MAX_BLOWUP_FACTOR: usize = 512_000;
@@ -36,29 +38,25 @@ impl fmt::Display for TransformError {
 
 impl std::error::Error for TransformError {}
 
-#[derive(Clone)]
-enum PairFrame {
-    Enter {
-        left: usize,
-        right: usize,
-    },
-    FinalizeRms {
-        key: (usize, usize),
-        other: usize,
-        src_a: LinComb,
-        deps: Vec<(ark_bn254::Fr, usize)>,
-    },
-    FinalizeWwAfterInner {
-        key: (usize, usize),
-        p: usize,
-        q: usize,
-        other: usize,
-    },
-    FinalizeWwAlias {
-        key: (usize, usize),
-        p: usize,
-        inner_result: usize,
-    },
+#[derive(Clone, Debug)]
+struct ScaledWitness {
+    coeff: Fr,
+    witness: usize,
+}
+
+impl ScaledWitness {
+    fn identity(witness: usize) -> Self {
+        Self {
+            coeff: Fr::one(),
+            witness,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+struct ScaledVariable {
+    coeff: Fr,
+    variable: Variable,
 }
 
 pub fn choudhuri_transform(input: &R1CS) -> TransformResult {
@@ -79,10 +77,11 @@ pub fn try_choudhuri_transform_with_limit(
     let mut new_constraints: Vec<Constraint> = Vec::new();
     let mut new_origin: HashMap<usize, usize> = HashMap::new();
     let mut next_w = input.num_witnesses + 1;
-    let mut product_cache: HashMap<(usize, usize), usize> = HashMap::new();
+    let mut product_cache: HashMap<(usize, usize), ScaledWitness> = HashMap::new();
     let mut depth_cache: HashMap<usize, usize> = HashMap::new();
     let input_lift_use_counts = count_input_lift_uses(input);
     let mut input_lift_cache: HashMap<String, usize> = HashMap::new();
+    let mut witness_aliases: HashMap<usize, ScaledWitness> = HashMap::new();
 
     depth_cache.insert(1, 0);
 
@@ -95,6 +94,7 @@ pub fn try_choudhuri_transform_with_limit(
                 &mut next_w,
                 &mut input_lift_cache,
                 &input_lift_use_counts,
+                &mut witness_aliases,
                 &mut depth_cache,
                 max_constraints,
             )?;
@@ -105,6 +105,7 @@ pub fn try_choudhuri_transform_with_limit(
                 out_w,
                 &mut new_constraints,
                 &mut new_origin,
+                &mut witness_aliases,
                 &mut depth_cache,
                 max_constraints,
             )?;
@@ -121,6 +122,7 @@ pub fn try_choudhuri_transform_with_limit(
                 &mut new_origin,
                 &mut next_w,
                 &mut product_cache,
+                &mut witness_aliases,
                 &mut depth_cache,
                 max_constraints,
             )?;
@@ -153,262 +155,232 @@ fn ensure_product(
     new_constraints: &mut Vec<Constraint>,
     new_origin: &mut HashMap<usize, usize>,
     next_w: &mut usize,
-    product_cache: &mut HashMap<(usize, usize), usize>,
+    product_cache: &mut HashMap<(usize, usize), ScaledWitness>,
+    witness_aliases: &mut HashMap<usize, ScaledWitness>,
     depth_cache: &mut HashMap<usize, usize>,
     max_constraints: usize,
 ) -> Result<usize, TransformError> {
-    let key = canonical_pair(left, right);
-    let root_key = key;
-    let mut stack = vec![PairFrame::Enter { left, right }];
-
-    while let Some(frame) = stack.pop() {
-        match frame {
-            PairFrame::Enter { left, right } => {
-                let key = canonical_pair(left, right);
-                if product_cache.contains_key(&key) {
-                    continue;
-                }
-
-                if left == 1 || right == 1 {
-                    product_cache.insert(key, if left == 1 { right } else { left });
-                    continue;
-                }
-
-                let (expand_w, other_w) = choose_expand_side(left, right, depth_cache)?;
-                let src = source_constraint(expand_w, new_constraints, new_origin)?.clone();
-
-                if src.a.is_input_only() {
-                    let deps = src
-                        .b
-                        .terms
-                        .iter()
-                        .map(|(coeff, var)| match var {
-                            Variable::Witness(w_j) => Ok((*coeff, *w_j)),
-                            other => panic!(
-                                "RMS witness side should contain only witnesses, found {:?}",
-                                other
-                            ),
-                        })
-                        .collect::<Result<Vec<_>, TransformError>>()?;
-
-                    let mut unresolved = Vec::new();
-                    for (_, dep_w) in &deps {
-                        let dep_key = canonical_pair(*dep_w, other_w);
-                        if !product_cache.contains_key(&dep_key) {
-                            unresolved.push((*dep_w, other_w));
-                        }
-                    }
-
-                    if unresolved.is_empty() {
-                        let out = materialize_rms_product(
-                            key,
-                            other_w,
-                            src.a.clone(),
-                            deps,
-                            preferred_output(key, root_key, final_output, product_cache),
-                            new_constraints,
-                            new_origin,
-                            next_w,
-                            product_cache,
-                            depth_cache,
-                            max_constraints,
-                        )?;
-                        product_cache.insert(key, out);
-                    } else {
-                        stack.push(PairFrame::FinalizeRms {
-                            key,
-                            other: other_w,
-                            src_a: src.a.clone(),
-                            deps,
-                        });
-                        for (dep_left, dep_right) in unresolved.into_iter().rev() {
-                            stack.push(PairFrame::Enter {
-                                left: dep_left,
-                                right: dep_right,
-                            });
-                        }
-                    }
-                } else {
-                    let w_p = extract_witness_idx(&src.a);
-                    let w_q = extract_witness_idx(&src.b);
-                    let inner_key = canonical_pair(w_q, other_w);
-
-                    if product_cache.contains_key(&inner_key) {
-                        let inner_result = product_cache[&inner_key];
-                        let outer_key = canonical_pair(w_p, inner_result);
-
-                        if let Some(&outer_result) = product_cache.get(&outer_key) {
-                            product_cache.insert(key, outer_result);
-                        } else {
-                            stack.push(PairFrame::FinalizeWwAlias {
-                                key,
-                                p: w_p,
-                                inner_result,
-                            });
-                            stack.push(PairFrame::Enter {
-                                left: w_p,
-                                right: inner_result,
-                            });
-                        }
-                    } else {
-                        stack.push(PairFrame::FinalizeWwAfterInner {
-                            key,
-                            p: w_p,
-                            q: w_q,
-                            other: other_w,
-                        });
-                        stack.push(PairFrame::Enter {
-                            left: w_q,
-                            right: other_w,
-                        });
-                    }
-                }
-            }
-            PairFrame::FinalizeRms {
-                key,
-                other,
-                src_a,
-                deps,
-            } => {
-                if product_cache.contains_key(&key) {
-                    continue;
-                }
-
-                let out = materialize_rms_product(
-                    key,
-                    other,
-                    src_a,
-                    deps,
-                    preferred_output(key, root_key, final_output, product_cache),
-                    new_constraints,
-                    new_origin,
-                    next_w,
-                    product_cache,
-                    depth_cache,
-                    max_constraints,
-                )?;
-                product_cache.insert(key, out);
-            }
-            PairFrame::FinalizeWwAfterInner { key, p, q, other } => {
-                if product_cache.contains_key(&key) {
-                    continue;
-                }
-
-                let inner_key = canonical_pair(q, other);
-                let inner_result = *product_cache
-                    .get(&inner_key)
-                    .ok_or(TransformError::MissingWitnessOrigin { witness: q })?;
-                let outer_key = canonical_pair(p, inner_result);
-
-                if let Some(&outer_result) = product_cache.get(&outer_key) {
-                    product_cache.insert(key, outer_result);
-                } else {
-                    stack.push(PairFrame::FinalizeWwAlias {
-                        key,
-                        p,
-                        inner_result,
-                    });
-                    stack.push(PairFrame::Enter {
-                        left: p,
-                        right: inner_result,
-                    });
-                }
-            }
-            PairFrame::FinalizeWwAlias {
-                key,
-                p,
-                inner_result,
-            } => {
-                if product_cache.contains_key(&key) {
-                    continue;
-                }
-
-                let outer_key = canonical_pair(p, inner_result);
-                let outer_result = *product_cache
-                    .get(&outer_key)
-                    .ok_or(TransformError::MissingWitnessOrigin { witness: p })?;
-                product_cache.insert(key, outer_result);
-            }
-        }
-    }
-
-    let result = *product_cache
-        .get(&key)
-        .ok_or(TransformError::MissingWitnessOrigin { witness: left })?;
+    let left = resolve_scaled_witness(ScaledWitness::identity(left), witness_aliases);
+    let right = resolve_scaled_witness(ScaledWitness::identity(right), witness_aliases);
+    let preferred_output = if left.coeff == Fr::one() && right.coeff == Fr::one() {
+        final_output
+    } else {
+        None
+    };
+    let result = ensure_scaled_product(
+        left,
+        right,
+        preferred_output,
+        new_constraints,
+        new_origin,
+        next_w,
+        product_cache,
+        witness_aliases,
+        depth_cache,
+        max_constraints,
+    )?;
 
     if let Some(out) = final_output {
-        if out != result {
-            push_constraint(
-                Constraint {
-                    a: LinComb::from_var(Variable::Input(0)),
-                    b: LinComb::from_var(Variable::Witness(result)),
-                    c: LinComb::from_var(Variable::Witness(out)),
-                },
+        if out != result.witness || result.coeff != Fr::one() {
+            materialize_scaled_alias(
                 out,
+                &result,
                 new_constraints,
                 new_origin,
+                witness_aliases,
                 depth_cache,
                 max_constraints,
             )?;
         }
         Ok(out)
     } else {
-        Ok(result)
+        Ok(result.witness)
     }
 }
 
-fn materialize_rms_product(
-    key: (usize, usize),
-    other: usize,
-    src_a: LinComb,
-    deps: Vec<(ark_bn254::Fr, usize)>,
+fn ensure_scaled_product(
+    left: ScaledWitness,
+    right: ScaledWitness,
     preferred_output: Option<usize>,
     new_constraints: &mut Vec<Constraint>,
     new_origin: &mut HashMap<usize, usize>,
     next_w: &mut usize,
-    product_cache: &HashMap<(usize, usize), usize>,
+    product_cache: &mut HashMap<(usize, usize), ScaledWitness>,
+    witness_aliases: &mut HashMap<usize, ScaledWitness>,
     depth_cache: &mut HashMap<usize, usize>,
     max_constraints: usize,
-) -> Result<usize, TransformError> {
-    let inner_terms = deps
-        .into_iter()
-        .map(|(coeff, dep_w)| {
-            let inner_key = canonical_pair(dep_w, other);
-            let inner_w = *product_cache
-                .get(&inner_key)
-                .ok_or(TransformError::MissingWitnessOrigin { witness: dep_w })?;
-            Ok((coeff, Variable::Witness(inner_w)))
-        })
-        .collect::<Result<Vec<_>, TransformError>>()?;
+) -> Result<ScaledWitness, TransformError> {
+    let left = resolve_scaled_witness(left, witness_aliases);
+    let right = resolve_scaled_witness(right, witness_aliases);
+    let external_scale = left.coeff * right.coeff;
 
-    let out = preferred_output.unwrap_or_else(|| allocate_helper_witness(next_w));
-    push_constraint(
-        Constraint {
-            a: src_a,
-            b: LinComb::from_terms(inner_terms),
-            c: LinComb::from_var(Variable::Witness(out)),
-        },
-        out,
-        new_constraints,
-        new_origin,
-        depth_cache,
-        max_constraints,
-    )?;
-    let _ = key;
-    Ok(out)
+    if left.witness == 1 {
+        return Ok(ScaledWitness {
+            coeff: external_scale,
+            witness: right.witness,
+        });
+    }
+
+    if right.witness == 1 {
+        return Ok(ScaledWitness {
+            coeff: external_scale,
+            witness: left.witness,
+        });
+    }
+
+    let key = canonical_pair(left.witness, right.witness);
+    if let Some(cached) = product_cache.get(&key) {
+        return Ok(ScaledWitness {
+            coeff: external_scale * cached.coeff,
+            witness: cached.witness,
+        });
+    }
+
+    let (expand_w, other_w) = choose_expand_side(key.0, key.1, depth_cache)?;
+    let src = source_constraint(expand_w, new_constraints, new_origin)?.clone();
+
+    let cached = if src.a.is_input_only() {
+        let mut grouped_terms: BTreeMap<usize, Fr> = BTreeMap::new();
+        for (coeff, var) in &src.b.terms {
+            let dep_w = match var {
+                Variable::Witness(w_j) => *w_j,
+                other => panic!(
+                    "RMS witness side should contain only witnesses, found {:?}",
+                    other
+                ),
+            };
+            let inner = ensure_scaled_product(
+                resolve_scaled_witness(ScaledWitness::identity(dep_w), witness_aliases),
+                ScaledWitness::identity(other_w),
+                None,
+                new_constraints,
+                new_origin,
+                next_w,
+                product_cache,
+                witness_aliases,
+                depth_cache,
+                max_constraints,
+            )?;
+            let merged_coeff = *coeff * inner.coeff;
+            if merged_coeff.is_zero() {
+                continue;
+            }
+            let entry = grouped_terms.entry(inner.witness).or_insert_with(Fr::zero);
+            *entry += merged_coeff;
+            if entry.is_zero() {
+                grouped_terms.remove(&inner.witness);
+            }
+        }
+
+        let inner_terms = grouped_terms
+            .into_iter()
+            .filter_map(|(witness, coeff)| {
+                if coeff.is_zero() {
+                    None
+                } else {
+                    Some((coeff, Variable::Witness(witness)))
+                }
+            })
+            .collect::<Vec<_>>();
+
+        let out = preferred_output.unwrap_or_else(|| allocate_helper_witness(next_w));
+        push_constraint(
+            Constraint {
+                a: src.a,
+                b: LinComb::from_terms(inner_terms),
+                c: LinComb::from_var(Variable::Witness(out)),
+            },
+            out,
+            new_constraints,
+            new_origin,
+            witness_aliases,
+            depth_cache,
+            max_constraints,
+        )?;
+        ScaledWitness::identity(out)
+    } else {
+        let left_factor = resolve_scaled_witness(
+            ScaledWitness::identity(extract_witness_idx(&src.a)),
+            witness_aliases,
+        );
+        let right_factor = resolve_scaled_witness(
+            ScaledWitness::identity(extract_witness_idx(&src.b)),
+            witness_aliases,
+        );
+        let inner = ensure_scaled_product(
+            right_factor,
+            ScaledWitness::identity(other_w),
+            None,
+            new_constraints,
+            new_origin,
+            next_w,
+            product_cache,
+            witness_aliases,
+            depth_cache,
+            max_constraints,
+        )?;
+        let outer = ensure_scaled_product(
+            left_factor,
+            inner,
+            None,
+            new_constraints,
+            new_origin,
+            next_w,
+            product_cache,
+            witness_aliases,
+            depth_cache,
+            max_constraints,
+        )?;
+
+        if let Some(out) = preferred_output {
+            materialize_scaled_alias(
+                out,
+                &outer,
+                new_constraints,
+                new_origin,
+                witness_aliases,
+                depth_cache,
+                max_constraints,
+            )?;
+            ScaledWitness::identity(out)
+        } else {
+            outer
+        }
+    };
+
+    product_cache.insert(key, cached.clone());
+    Ok(ScaledWitness {
+        coeff: external_scale * cached.coeff,
+        witness: cached.witness,
+    })
 }
 
-fn preferred_output(
-    key: (usize, usize),
-    root_key: (usize, usize),
-    final_output: Option<usize>,
-    product_cache: &HashMap<(usize, usize), usize>,
-) -> Option<usize> {
-    if key == root_key && !product_cache.contains_key(&key) {
-        final_output
-    } else {
-        None
+fn materialize_scaled_alias(
+    output: usize,
+    source: &ScaledWitness,
+    new_constraints: &mut Vec<Constraint>,
+    new_origin: &mut HashMap<usize, usize>,
+    witness_aliases: &mut HashMap<usize, ScaledWitness>,
+    depth_cache: &mut HashMap<usize, usize>,
+    max_constraints: usize,
+) -> Result<(), TransformError> {
+    if output == source.witness && source.coeff == Fr::one() {
+        return Ok(());
     }
+
+    push_constraint(
+        Constraint {
+            a: LinComb::from_var(Variable::Input(0)),
+            b: LinComb::from_terms(vec![(source.coeff, Variable::Witness(source.witness))]),
+            c: LinComb::from_var(Variable::Witness(output)),
+        },
+        output,
+        new_constraints,
+        new_origin,
+        witness_aliases,
+        depth_cache,
+        max_constraints,
+    )
 }
 
 fn lower_input_input_constraint(
@@ -418,6 +390,7 @@ fn lower_input_input_constraint(
     next_w: &mut usize,
     input_lift_cache: &mut HashMap<String, usize>,
     input_lift_use_counts: &HashMap<String, usize>,
+    witness_aliases: &mut HashMap<usize, ScaledWitness>,
     depth_cache: &mut HashMap<usize, usize>,
     max_constraints: usize,
 ) -> Result<(), TransformError> {
@@ -451,6 +424,7 @@ fn lower_input_input_constraint(
             w_tmp,
             new_constraints,
             new_origin,
+            witness_aliases,
             depth_cache,
             max_constraints,
         )?;
@@ -468,6 +442,7 @@ fn lower_input_input_constraint(
         out_w,
         new_constraints,
         new_origin,
+        witness_aliases,
         depth_cache,
         max_constraints,
     )
@@ -521,6 +496,7 @@ fn push_constraint(
     output_witness: usize,
     new_constraints: &mut Vec<Constraint>,
     new_origin: &mut HashMap<usize, usize>,
+    witness_aliases: &mut HashMap<usize, ScaledWitness>,
     depth_cache: &mut HashMap<usize, usize>,
     max_constraints: usize,
 ) -> Result<(), TransformError> {
@@ -533,9 +509,13 @@ fn push_constraint(
 
     let idx = new_constraints.len();
     let depth = constraint_depth(&constraint, depth_cache)?;
+    let scalar_alias = extract_scalar_witness_alias(&constraint, witness_aliases);
     new_origin.insert(output_witness, idx);
     new_constraints.push(constraint);
     depth_cache.insert(output_witness, depth);
+    if let Some(alias) = scalar_alias {
+        witness_aliases.insert(output_witness, alias);
+    }
     Ok(())
 }
 
@@ -577,7 +557,6 @@ fn choose_expand_side(
 ) -> Result<(usize, usize), TransformError> {
     let left_depth = witness_depth(left, depth_cache)?;
     let right_depth = witness_depth(right, depth_cache)?;
-
     Ok(if left_depth <= right_depth {
         (left, right)
     } else {
@@ -615,6 +594,66 @@ fn canonical_pair(left: usize, right: usize) -> (usize, usize) {
     (left.min(right), left.max(right))
 }
 
+fn resolve_witness_alias(
+    witness: usize,
+    witness_aliases: &HashMap<usize, ScaledWitness>,
+) -> ScaledWitness {
+    let mut coeff = Fr::one();
+    let mut current = witness;
+
+    while let Some(alias) = witness_aliases.get(&current) {
+        coeff *= alias.coeff;
+        current = alias.witness;
+    }
+
+    ScaledWitness {
+        coeff,
+        witness: current,
+    }
+}
+
+fn resolve_scaled_witness(
+    scaled: ScaledWitness,
+    witness_aliases: &HashMap<usize, ScaledWitness>,
+) -> ScaledWitness {
+    let resolved = resolve_witness_alias(scaled.witness, witness_aliases);
+    ScaledWitness {
+        coeff: scaled.coeff * resolved.coeff,
+        witness: resolved.witness,
+    }
+}
+
+fn constant_input_scale(lc: &LinComb) -> Option<Fr> {
+    let mut coeff = Fr::zero();
+    for (term_coeff, var) in &lc.terms {
+        match var {
+            Variable::Input(0) => coeff += term_coeff,
+            _ => return None,
+        }
+    }
+    Some(coeff)
+}
+
+fn extract_scalar_witness_alias(
+    constraint: &Constraint,
+    witness_aliases: &HashMap<usize, ScaledWitness>,
+) -> Option<ScaledWitness> {
+    let scale = constant_input_scale(&constraint.a)?;
+    let (wit_coeff, witness) = match constraint.b.terms.as_slice() {
+        [(coeff, Variable::Witness(witness))] => (*coeff, *witness),
+        _ => return None,
+    };
+    let resolved = resolve_witness_alias(witness, witness_aliases);
+    let merged_coeff = scale * wit_coeff * resolved.coeff;
+    if merged_coeff.is_zero() {
+        return None;
+    }
+    Some(ScaledWitness {
+        coeff: merged_coeff,
+        witness: resolved.witness,
+    })
+}
+
 fn allocate_helper_witness(next_w: &mut usize) -> usize {
     let witness = *next_w;
     *next_w += 1;
@@ -632,21 +671,58 @@ fn constraint_key(c: &Constraint) -> String {
     format!("{}|{}", lincomb_to_string(&c.a), lincomb_to_string(&c.b))
 }
 
-fn normalize_lincomb(lc: &LinComb, redirect: &HashMap<String, Variable>) -> LinComb {
+fn resolve_variable_alias(
+    variable: &Variable,
+    coeff: Fr,
+    redirect: &HashMap<String, ScaledVariable>,
+) -> ScaledVariable {
+    let mut resolved_coeff = coeff;
+    let mut resolved_var = variable.clone();
+
+    while let Some(next) = redirect.get(&var_to_string(&resolved_var)) {
+        resolved_coeff *= next.coeff;
+        resolved_var = next.variable.clone();
+    }
+
+    ScaledVariable {
+        coeff: resolved_coeff,
+        variable: resolved_var,
+    }
+}
+
+fn normalize_lincomb(lc: &LinComb, redirect: &HashMap<String, ScaledVariable>) -> LinComb {
+    let mut grouped: BTreeMap<String, (Fr, Variable)> = BTreeMap::new();
+
+    for (coeff, var) in &lc.terms {
+        let resolved = resolve_variable_alias(var, *coeff, redirect);
+        if resolved.coeff.is_zero() {
+            continue;
+        }
+        let key = var_to_string(&resolved.variable);
+        let entry = grouped
+            .entry(key)
+            .or_insert_with(|| (Fr::zero(), resolved.variable.clone()));
+        entry.0 += resolved.coeff;
+        if entry.0.is_zero() {
+            grouped.remove(&var_to_string(&resolved.variable));
+        }
+    }
+
     LinComb {
-        terms: lc
-            .terms
-            .iter()
-            .map(|(coeff, var)| {
-                let key = var_to_string(var);
-                let new_var = redirect.get(&key).cloned().unwrap_or_else(|| var.clone());
-                (*coeff, new_var)
+        terms: grouped
+            .into_values()
+            .filter_map(|(coeff, variable)| {
+                if coeff.is_zero() {
+                    None
+                } else {
+                    Some((coeff, variable))
+                }
             })
             .collect(),
     }
 }
 
-fn normalize_constraint(c: &Constraint, redirect: &HashMap<String, Variable>) -> Constraint {
+fn normalize_constraint(c: &Constraint, redirect: &HashMap<String, ScaledVariable>) -> Constraint {
     Constraint {
         a: normalize_lincomb(&c.a, redirect),
         b: normalize_lincomb(&c.b, redirect),
@@ -654,30 +730,57 @@ fn normalize_constraint(c: &Constraint, redirect: &HashMap<String, Variable>) ->
     }
 }
 
-fn extract_single_var(lc: &LinComb) -> Option<Variable> {
-    if lc.terms.len() == 1 {
-        Some(lc.terms[0].1.clone())
-    } else {
-        None
+fn extract_output_var(lc: &LinComb) -> Option<Variable> {
+    match lc.terms.as_slice() {
+        [(coeff, var)] if *coeff == Fr::one() => Some(var.clone()),
+        _ => None,
     }
+}
+
+fn extract_scalar_alias_target(constraint: &Constraint) -> Option<ScaledVariable> {
+    let scale = constant_input_scale(&constraint.a)?;
+    let (wit_coeff, witness) = match constraint.b.terms.as_slice() {
+        [(coeff, Variable::Witness(witness))] => (*coeff, *witness),
+        _ => return None,
+    };
+    let merged_coeff = scale * wit_coeff;
+    if merged_coeff.is_zero() {
+        return None;
+    }
+    Some(ScaledVariable {
+        coeff: merged_coeff,
+        variable: Variable::Witness(witness),
+    })
 }
 
 pub fn eliminate_common_subexpressions(r1cs: &R1CS) -> (R1CS, usize) {
     let mut seen: HashMap<String, Variable> = HashMap::new();
-    let mut redirect: HashMap<String, Variable> = HashMap::new();
+    let mut redirect: HashMap<String, ScaledVariable> = HashMap::new();
     let mut new_constraints: Vec<Constraint> = Vec::new();
     let mut new_origin: HashMap<usize, usize> = HashMap::new();
 
     for constraint in &r1cs.constraints {
         let normalized = normalize_constraint(constraint, &redirect);
+        if let Some(target) = extract_scalar_alias_target(&normalized) {
+            if let Some(out) = extract_output_var(&normalized.c) {
+                redirect.insert(var_to_string(&out), target);
+            }
+            continue;
+        }
         let key = constraint_key(&normalized);
 
         if let Some(existing_out) = seen.get(&key) {
-            if let Some(out) = extract_single_var(&normalized.c) {
-                redirect.insert(var_to_string(&out), existing_out.clone());
+            if let Some(out) = extract_output_var(&normalized.c) {
+                redirect.insert(
+                    var_to_string(&out),
+                    ScaledVariable {
+                        coeff: Fr::one(),
+                        variable: existing_out.clone(),
+                    },
+                );
             }
         } else {
-            if let Some(out) = extract_single_var(&normalized.c) {
+            if let Some(out) = extract_output_var(&normalized.c) {
                 seen.insert(key, out.clone());
                 if let Variable::Witness(i) = out {
                     new_origin.insert(i, new_constraints.len());
@@ -710,6 +813,7 @@ fn extract_witness_idx(lc: &LinComb) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ark_ff::One;
 
     #[test]
     fn transform_limit_fails_fast_with_clear_error() {
@@ -739,5 +843,109 @@ mod tests {
                 produced: 1
             }
         ));
+    }
+
+    #[test]
+    fn eliminate_common_subexpressions_folds_scalar_aliases() {
+        let mut r1cs = R1CS::new(2, 3);
+        r1cs.add_constraint(
+            Constraint {
+                a: LinComb::from_var(Variable::Input(0)),
+                b: LinComb::from_terms(vec![(Fr::from(5u64), Variable::Witness(1))]),
+                c: LinComb::from_var(Variable::Witness(2)),
+            },
+            2,
+        );
+        r1cs.add_constraint(
+            Constraint {
+                a: LinComb::from_var(Variable::Input(1)),
+                b: LinComb::from_var(Variable::Witness(2)),
+                c: LinComb::from_var(Variable::Witness(3)),
+            },
+            3,
+        );
+
+        let (optimized, eliminated) = eliminate_common_subexpressions(&r1cs);
+        assert_eq!(eliminated, 1);
+        assert_eq!(optimized.constraints.len(), 1);
+        assert_eq!(optimized.constraints[0].a.terms.len(), 1);
+        assert_eq!(optimized.constraints[0].b.terms.len(), 1);
+        assert_eq!(optimized.constraints[0].b.terms[0].0, Fr::from(5u64));
+        assert_eq!(optimized.constraints[0].b.terms[0].1, Variable::Witness(1));
+    }
+
+    #[test]
+    fn scaled_aliases_hit_product_cache() {
+        let mut new_constraints = Vec::new();
+        let mut new_origin = HashMap::new();
+        let mut next_w = 4usize;
+        let mut product_cache = HashMap::new();
+        let mut witness_aliases = HashMap::new();
+        let mut depth_cache = HashMap::new();
+        depth_cache.insert(1, 0);
+
+        push_constraint(
+            Constraint {
+                a: LinComb::from_var(Variable::Input(1)),
+                b: LinComb::from_var(Variable::Witness(1)),
+                c: LinComb::from_var(Variable::Witness(2)),
+            },
+            2,
+            &mut new_constraints,
+            &mut new_origin,
+            &mut witness_aliases,
+            &mut depth_cache,
+            128,
+        )
+        .expect("seed RMS constraint");
+
+        push_constraint(
+            Constraint {
+                a: LinComb::from_var(Variable::Input(0)),
+                b: LinComb::from_terms(vec![(-Fr::one(), Variable::Witness(2))]),
+                c: LinComb::from_var(Variable::Witness(3)),
+            },
+            3,
+            &mut new_constraints,
+            &mut new_origin,
+            &mut witness_aliases,
+            &mut depth_cache,
+            128,
+        )
+        .expect("seed scalar alias");
+
+        let neg_square = ensure_scaled_product(
+            resolve_scaled_witness(ScaledWitness::identity(3), &witness_aliases),
+            ScaledWitness::identity(2),
+            None,
+            &mut new_constraints,
+            &mut new_origin,
+            &mut next_w,
+            &mut product_cache,
+            &mut witness_aliases,
+            &mut depth_cache,
+            128,
+        )
+        .expect("build aliased product");
+        assert_eq!(product_cache.len(), 1);
+
+        let square = ensure_scaled_product(
+            ScaledWitness::identity(2),
+            ScaledWitness::identity(2),
+            None,
+            &mut new_constraints,
+            &mut new_origin,
+            &mut next_w,
+            &mut product_cache,
+            &mut witness_aliases,
+            &mut depth_cache,
+            128,
+        )
+        .expect("reuse cached base product");
+
+        assert_eq!(product_cache.len(), 1);
+        assert_eq!(neg_square.witness, square.witness);
+        assert_eq!(neg_square.coeff, -Fr::one());
+        assert_eq!(square.coeff, Fr::one());
     }
 }

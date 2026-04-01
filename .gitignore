@@ -1,6 +1,3 @@
 /target
 /node_modules
 .DS_Store
-**/target
-/data/generated/*
-!/data/generated/.gitkeep
