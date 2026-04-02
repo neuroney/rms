@@ -5,7 +5,7 @@ use ark_ff::{One, Zero};
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 
-const DEFAULT_MAX_BLOWUP_FACTOR: usize = 512_000;
+const DEFAULT_MAX_BLOWUP_FACTOR: usize = 512_000_000_000;
 const DEFAULT_MAX_TRANSFORMED_CONSTRAINTS: usize = 1_000_000_000_000;
 
 #[derive(Clone, Debug)]

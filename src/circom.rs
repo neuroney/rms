@@ -121,9 +121,10 @@ pub fn evaluate_equivalence(
         Ok(None) => {
             return CircomEvalReport {
                 attempted: false,
-                skipped_reason: Some(
-                    "缺少可用的 .wasm + input.json，跳过真实 witness 对拍".to_string(),
-                ),
+                skipped_reason: Some(format!(
+                    "{}，跳过真实 witness 对拍",
+                    reference_witness_unavailable_reason(generated)
+                )),
                 original_valid: false,
                 transformed_valid: false,
                 outputs_match: false,
@@ -292,8 +293,10 @@ fn build_export_input_config(
     }
 
     let witness_values = load_reference_witness(generated)?.ok_or_else(|| {
-        "rms-linear-v2 导出需要 public input 的具体值；当前缺少 .wasm + input.json，无法生成 reference witness"
-            .to_string()
+        format!(
+            "rms-linear-v2 导出需要 public input 的具体值；{}，无法生成 reference witness",
+            reference_witness_unavailable_reason(generated)
+        )
     })?;
 
     let public_inputs = generated
@@ -785,6 +788,26 @@ fn discover_source_input_json(source_path: &Path) -> Option<PathBuf> {
 
     let generic = parent.join("input.json");
     generic.exists().then_some(generic)
+}
+
+fn reference_witness_unavailable_reason(generated: &GeneratedCircom) -> String {
+    if generated.artifacts.format != CircomImportFormat::BinaryR1cs {
+        return "导入格式不是 binary .r1cs，无法使用 snarkjs 生成 reference witness".to_string();
+    }
+
+    let mut missing = Vec::new();
+    if generated.artifacts.wasm_path.is_none() {
+        missing.push(".wasm");
+    }
+    if generated.artifacts.input_json_path.is_none() {
+        missing.push("input.json");
+    }
+
+    if missing.is_empty() {
+        "缺少可用 reference witness 依赖".to_string()
+    } else {
+        format!("缺少可用的 {}", missing.join(" + "))
+    }
 }
 
 fn signal_name(symbols: Option<&CircomSymbolTable>, signal_id: usize) -> Option<String> {

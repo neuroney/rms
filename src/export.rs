@@ -202,8 +202,10 @@ pub fn export_r1cs_bundle(
     r1cs: &R1CS,
     export_stem: &str,
 ) -> Result<WrittenArtifacts, Box<dyn Error>> {
-    let json_path = format!("{}.json", export_stem);
-    let bin_path = format!("{}.bin", export_stem);
+    let stem_with_constraints =
+        append_constraint_count_to_stem(export_stem, r1cs.constraints.len());
+    let json_path = format!("{}.json", stem_with_constraints);
+    let bin_path = format!("{}.bin", stem_with_constraints);
 
     export_r1cs_to_json(r1cs, &json_path)?;
     export_r1cs_to_bin(r1cs, &bin_path)?;
@@ -216,8 +218,10 @@ pub fn export_r1cs_bundle_with_inputs(
     export_stem: &str,
     input_config: &ExportInputConfig,
 ) -> Result<WrittenArtifacts, Box<dyn Error>> {
-    let json_path = format!("{}.json", export_stem);
-    let bin_path = format!("{}.bin", export_stem);
+    let stem_with_constraints =
+        append_constraint_count_to_stem(export_stem, r1cs.constraints.len());
+    let json_path = format!("{}.json", stem_with_constraints);
+    let bin_path = format!("{}.bin", stem_with_constraints);
 
     export_r1cs_to_json_with_inputs(r1cs, &json_path, input_config)?;
     export_r1cs_to_bin_with_inputs(r1cs, &bin_path, input_config)?;
@@ -229,8 +233,10 @@ pub fn write_export_bundle(
     export_stem: &str,
     export: &RmsLinearExport,
 ) -> Result<WrittenArtifacts, Box<dyn Error>> {
-    let json_path = format!("{}.json", export_stem);
-    let bin_path = format!("{}.bin", export_stem);
+    let stem_with_constraints =
+        append_constraint_count_to_stem(export_stem, export.constraints.len());
+    let json_path = format!("{}.json", stem_with_constraints);
+    let bin_path = format!("{}.bin", stem_with_constraints);
 
     write_r1cs(&json_path, export, OutputFormat::Json)?;
     write_r1cs(&bin_path, export, OutputFormat::Bin)?;
@@ -383,6 +389,10 @@ fn format_term(term: &Term, prefix: &str) -> String {
         "1" => format!("{}{}", prefix, term.index),
         coeff => format!("{}*{}{}", coeff, prefix, term.index),
     }
+}
+
+fn append_constraint_count_to_stem(export_stem: &str, num_constraints: usize) -> String {
+    format!("{}_c{}", export_stem, num_constraints)
 }
 
 fn summarize_written_artifacts(
