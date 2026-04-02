@@ -71,7 +71,7 @@ impl MatrixMulRunConfig {
             cols,
             left_values,
             right_values,
-            export_stem: format!("data/matrix_mul_{}x{}x{}_rms", rows, shared, cols),
+            export_stem: format!("data/matrix_mul_{}x{}x{}", rows, shared, cols),
         }
     }
 }

@@ -8,6 +8,12 @@ use crate::transform::{choudhuri_transform, eliminate_common_subexpressions, Tra
 use crate::utils::print_constraints;
 use ark_bn254::Fr;
 use ark_ff::{Field, One, Zero};
+use rand::{rngs::StdRng, Rng, SeedableRng};
+
+pub const DEFAULT_NUM_VERTICES: usize = 16;
+pub const DEFAULT_ITERATIONS: usize = 5;
+pub const DEFAULT_TARGET_OUT_DEGREE: usize = 8;
+pub const DEFAULT_SEED: u64 = 42;
 
 #[derive(Clone, Debug)]
 pub struct PageRankCircuit {
@@ -82,19 +88,27 @@ pub type PageRankExportReport = WrittenArtifacts;
 
 impl PageRankRunConfig {
     pub fn demo() -> Self {
-        Self::demo_with_iterations(5)
+        Self::sampled(DEFAULT_NUM_VERTICES, DEFAULT_ITERATIONS, DEFAULT_SEED)
     }
 
     pub fn demo_with_iterations(iterations: usize) -> Self {
-        let adjacency = vec![
-            vec![0, 1, 1, 0],
-            vec![0, 0, 1, 0],
-            vec![1, 0, 0, 0],
-            vec![0, 0, 0, 0],
-        ];
+        Self::sampled(DEFAULT_NUM_VERTICES, iterations, DEFAULT_SEED)
+    }
 
+    pub fn sampled(num_vertices: usize, iterations: usize, seed: u64) -> Self {
+        let adjacency = sample_sparse_directed_graph(num_vertices, DEFAULT_TARGET_OUT_DEGREE, seed);
         Self {
-            export_stem: format!("data/page_rank_{}v_{}iter_rms", adjacency.len(), iterations),
+            export_stem: format!("data/page_rank_{}v_{}iter", num_vertices, iterations),
+            adjacency,
+            alpha_num: 17,
+            alpha_den: 20,
+            iterations,
+        }
+    }
+
+    pub fn from_adjacency(adjacency: Vec<Vec<u8>>, iterations: usize) -> Self {
+        Self {
+            export_stem: format!("data/page_rank_{}v_{}iter", adjacency.len(), iterations),
             adjacency,
             alpha_num: 17,
             alpha_den: 20,
@@ -377,6 +391,11 @@ pub fn run_with_args(args: &[String]) -> Result<(), String> {
             "iterations",
             iterations,
         )?),
+        [num_vertices, iterations] => PageRankRunConfig::sampled(
+            parse_positive_usize_arg("num_vertices", num_vertices)?,
+            parse_positive_usize_arg("iterations", iterations)?,
+            DEFAULT_SEED,
+        ),
         _ => return Err(usage_text().to_string()),
     };
 
@@ -403,6 +422,10 @@ fn run_with_config(config: PageRankRunConfig) -> Result<(), String> {
 
     println!("【1. 生成电路】");
     println!("  顶点数: {}", generated.compiled.num_vertices);
+    println!(
+        "  平均出度: {:.2}",
+        average_out_degree(&generated.compiled.out_degrees)
+    );
     println!("  迭代次数: {}", generated.compiled.iterations);
     println!(
         "  alpha = {}/{} ≈ {:.6}",
@@ -573,6 +596,35 @@ fn build_uniform_rank_vector(num_vertices: usize) -> (Vec<Fr>, Vec<f64>) {
     let rank = fr_fraction(1, num_vertices as u64);
     let rank_approx = 1.0 / num_vertices as f64;
     (vec![rank; num_vertices], vec![rank_approx; num_vertices])
+}
+
+fn sample_sparse_directed_graph(
+    num_vertices: usize,
+    target_out_degree: usize,
+    seed: u64,
+) -> Vec<Vec<u8>> {
+    assert!(num_vertices > 0, "PageRank 图不能为空");
+    if num_vertices == 1 {
+        return vec![vec![0]];
+    }
+
+    let edge_probability = (target_out_degree as f64 / (num_vertices - 1) as f64).clamp(0.0, 1.0);
+    let mut rng = StdRng::seed_from_u64(seed);
+    let mut adjacency = vec![vec![0u8; num_vertices]; num_vertices];
+
+    for (source, row) in adjacency.iter_mut().enumerate() {
+        for (target, value) in row.iter_mut().enumerate() {
+            if source == target {
+                continue;
+            }
+
+            if rng.gen_bool(edge_probability) {
+                *value = 1;
+            }
+        }
+    }
+
+    adjacency
 }
 
 fn build_initial_rank_inputs(indices: &[usize], values: &[Fr]) -> Vec<(usize, Fr)> {
@@ -763,6 +815,10 @@ fn print_approx_matrix(name: &str, matrix: &[Vec<f64>]) {
     }
 }
 
+fn average_out_degree(out_degrees: &[usize]) -> f64 {
+    out_degrees.iter().sum::<usize>() as f64 / out_degrees.len() as f64
+}
+
 fn format_approx_vector(values: &[f64]) -> String {
     let formatted = values
         .iter()
@@ -808,10 +864,11 @@ fn usage_text() -> &'static str {
 用法:
   cargo run -- page_rank
   cargo run -- page_rank <iterations>
+  cargo run -- page_rank <num_vertices> <iterations>
 
 说明:
-  默认图: 4 个顶点，其中包含 1 个 dangling 顶点。
-  默认参数: alpha=17/20, teleport=uniform, iterations=5。
+  默认参数: num_vertices=16, iterations=5, alpha=17/20, teleport=uniform。
+  邻接矩阵按稀疏有向 G(n, p) 采样，禁止自环，p=min(8/(n-1), 1)，seed=42。
   电路按稀疏传播项、dangling mass 和 teleportation 分开编译，不显式展开稠密 Google 矩阵。"
 }
 
@@ -821,7 +878,15 @@ mod circuit_tests {
 
     #[test]
     fn sparse_page_rank_matches_dense_google_matrix_semantics() {
-        let config = PageRankRunConfig::demo_with_iterations(3);
+        let config = PageRankRunConfig::from_adjacency(
+            vec![
+                vec![0, 1, 1, 0],
+                vec![0, 0, 1, 0],
+                vec![1, 0, 0, 0],
+                vec![0, 0, 0, 0],
+            ],
+            3,
+        );
         let compiled = compile_page_rank(&config);
         let (initial_rank, _) = build_uniform_rank_vector(compiled.num_vertices);
         let dense_google = build_google_matrix_field(&compiled);
@@ -833,7 +898,15 @@ mod circuit_tests {
 
     #[test]
     fn page_rank_circuit_is_rms_and_preserves_output() {
-        let generated = generate_circuit(PageRankRunConfig::demo_with_iterations(3));
+        let generated = generate_circuit(PageRankRunConfig::from_adjacency(
+            vec![
+                vec![0, 1, 1, 0],
+                vec![0, 0, 1, 0],
+                vec![1, 0, 0, 0],
+                vec![0, 0, 0, 0],
+            ],
+            3,
+        ));
         let transformed = transform_circuit(&generated);
 
         assert!(generated
@@ -873,6 +946,18 @@ mod circuit_tests {
             &optimized_assignment,
         );
         assert_eq!(optimized_output, generated.expected_output);
+    }
+
+    #[test]
+    fn sampled_graph_is_square_and_has_no_self_loops() {
+        let adjacency = sample_sparse_directed_graph(12, DEFAULT_TARGET_OUT_DEGREE, DEFAULT_SEED);
+
+        assert_eq!(adjacency.len(), 12);
+        assert!(adjacency.iter().all(|row| row.len() == 12));
+        assert!(adjacency
+            .iter()
+            .enumerate()
+            .all(|(index, row)| row[index] == 0));
     }
 }
 

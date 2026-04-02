@@ -26,7 +26,7 @@ impl RandomMulRunConfig {
             num_inputs,
             num_constraints,
             seed,
-            export_stem: format!("data/random_mul_n{}_d{}_rms", num_inputs, num_constraints),
+            export_stem: format!("data/random_mul_n{}_d{}", num_inputs, num_constraints),
         }
     }
 }

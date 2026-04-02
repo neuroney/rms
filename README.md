@@ -65,6 +65,7 @@ cargo run -- matrix_mul 6
 cargo run -- matrix_mul 4 8 6
 cargo run -- greater_than 16
 cargo run -- page_rank 8
+cargo run -- page_rank 32 8
 cargo run -- random_mul 8 128
 cargo run -- random_linear 8 128
 cargo run -- dense_poly 6 3
@@ -77,7 +78,7 @@ Parameter summary:
 
 - `matrix_mul`: `dim` or `rows shared cols`
 - `greater_than`: `bit`
-- `page_rank`: `iterations`
+- `page_rank`: `iterations` or `num_vertices iterations`
 - `random_mul`: `num_inputs num_constraints`
 - `random_linear`: `num_inputs num_constraints`
 - `dense_poly`: `num_vars degree`
@@ -106,6 +107,9 @@ cargo test -- --nocapture
   available from the reference witness flow.
 - `page_rank` keeps the Google matrix sparse in the circuit by compiling
   edge propagation, dangling-mass handling, and teleportation as separate RMS steps.
+- `page_rank` samples a sparse directed graph for the adjacency matrix by default:
+  no self-loops and `p = min(8 / (n - 1), 1)`, which keeps expected out-degree roughly constant as
+  `n` grows.
 - Circom fixture batch runs are orchestrated by `scripts/run_fixture_circom_batch.sh`.
 - R1CS inspection helpers live in `scripts/analyze_r1cs.py` and `scripts/compare_circuits.py`.
 - Node dependencies in `package.json` are only needed for Circom/snarkjs-based fixture workflows.

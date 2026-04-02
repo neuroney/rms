@@ -279,7 +279,7 @@ pub fn export_circuit(
     let input_config = build_export_input_config(generated)?;
     export_r1cs_bundle_with_inputs(
         &transformed.optimized,
-        &format!("data/{}_rms", stem),
+        &format!("data/{}", stem),
         &input_config,
     )
 }

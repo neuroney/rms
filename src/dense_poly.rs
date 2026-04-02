@@ -41,7 +41,7 @@ impl DensePolyRunConfig {
             num_vars,
             max_degree,
             seed,
-            export_stem: format!("data/dense_poly_n{}_d{}_rms", num_vars, max_degree),
+            export_stem: format!("data/dense_poly_n{}_d{}", num_vars, max_degree),
         }
     }
 }

@@ -50,6 +50,7 @@ RMS Toolkit
   cargo run -- matrix_mul [rows shared cols]
   cargo run -- greater_than [bit]
   cargo run -- page_rank [iterations]
+  cargo run -- page_rank [num_vertices iterations]
   cargo run -- random_mul [num_inputs num_constraints]
   cargo run -- random_linear [num_inputs num_constraints]
   cargo run -- dense_poly [num_vars degree]
@@ -60,5 +61,5 @@ RMS Toolkit
   默认运行矩阵乘法示例。
   内置 7 个核心命令: circom、greater_than、matrix_mul、page_rank、random_mul、random_linear、dense_poly。
   前 6 个走 Rust 代码路径生成最终 RMS 工件；`circom` 负责从通用 Circom 电路导入并转换为 RMS。
-  `matrix_mul` 支持 1 个方阵维度参数或 3 个矩阵维度参数，`page_rank` 支持迭代次数参数，其余命令支持对应的核心规模参数。"
+  `matrix_mul` 支持 1 个方阵维度参数或 3 个矩阵维度参数，`page_rank` 支持 `iterations` 或 `num_vertices iterations`，其余命令支持对应的核心规模参数。"
 }

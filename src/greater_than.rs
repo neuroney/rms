@@ -69,7 +69,7 @@ impl GreaterThanRunConfig {
             num_bits,
             alpha,
             beta,
-            export_stem: format!("data/greater_than_{}bit_rms", num_bits),
+            export_stem: format!("data/greater_than_{}bit", num_bits),
         }
     }
 }
