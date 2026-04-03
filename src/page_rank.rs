@@ -14,6 +14,8 @@ pub const DEFAULT_NUM_VERTICES: usize = 16;
 pub const DEFAULT_ITERATIONS: usize = 5;
 pub const DEFAULT_TARGET_OUT_DEGREE: usize = 8;
 pub const DEFAULT_SEED: u64 = 42;
+const ZERO_PUBLIC_INPUT_INDEX: usize = 1;
+const FIRST_EXTERNAL_INPUT_INDEX: usize = 2;
 
 #[derive(Clone, Debug)]
 pub struct PageRankCircuit {
@@ -121,18 +123,20 @@ pub fn generate_page_rank_r1cs(compiled: &CompiledPageRank) -> PageRankCircuit {
     assert!(compiled.num_vertices > 0, "PageRank 顶点数必须大于 0");
     assert!(compiled.iterations > 0, "PageRank 迭代次数必须大于 0");
 
-    let num_inputs = 1 + compiled.num_vertices;
+    let num_inputs = FIRST_EXTERNAL_INPUT_INDEX + compiled.num_vertices;
     let mut r1cs = R1CS::new(num_inputs, 0);
 
-    let initial_rank_input_indices = (1..=compiled.num_vertices).collect::<Vec<_>>();
+    let initial_rank_input_indices = (FIRST_EXTERNAL_INPUT_INDEX
+        ..FIRST_EXTERNAL_INPUT_INDEX + compiled.num_vertices)
+        .collect::<Vec<_>>();
 
     let mut next_witness = 2usize;
     let zero_witness = next_witness;
     next_witness += 1;
     r1cs.add_constraint(
         Constraint {
-            a: LinComb::from_var(Variable::Input(0)),
-            b: LinComb::from_terms(vec![]),
+            a: LinComb::from_var(Variable::Input(ZERO_PUBLIC_INPUT_INDEX)),
+            b: LinComb::from_var(Variable::Witness(1)),
             c: LinComb::from_var(Variable::Witness(zero_witness)),
         },
         zero_witness,
@@ -369,7 +373,7 @@ pub fn export_circuit(
     export_r1cs_bundle_with_inputs(
         &transformed.optimized,
         &generated.config.export_stem,
-        &ExportInputConfig::all_private(generated.circuit.r1cs.num_inputs),
+        &page_rank_export_input_config(generated.circuit.r1cs.num_inputs),
     )
 }
 
@@ -628,11 +632,20 @@ fn sample_sparse_directed_graph(
 }
 
 fn build_initial_rank_inputs(indices: &[usize], values: &[Fr]) -> Vec<(usize, Fr)> {
-    indices
-        .iter()
-        .zip(values.iter())
-        .map(|(&index, &value)| (index, value))
-        .collect()
+    let mut inputs = Vec::with_capacity(indices.len() + 1);
+    inputs.push((ZERO_PUBLIC_INPUT_INDEX, Fr::zero()));
+    inputs.extend(
+        indices
+            .iter()
+            .zip(values.iter())
+            .map(|(&index, &value)| (index, value)),
+    );
+    inputs
+}
+
+fn page_rank_export_input_config(num_inputs: usize) -> ExportInputConfig {
+    ExportInputConfig::from_public_values(num_inputs, vec![(ZERO_PUBLIC_INPUT_INDEX, Fr::zero())])
+        .expect("page rank fixed zero public input should be valid")
 }
 
 fn witness_sum_lincomb(witnesses: &[usize]) -> LinComb {
@@ -915,11 +928,22 @@ mod circuit_tests {
             .constraints
             .iter()
             .all(|constraint| constraint.is_rms_compatible()));
+        assert!(generated
+            .circuit
+            .r1cs
+            .constraints
+            .iter()
+            .all(|constraint| !constraint.a.terms.is_empty()));
         assert!(transformed
             .optimized
             .constraints
             .iter()
             .all(|constraint| constraint.is_rms_compatible()));
+        assert!(transformed
+            .optimized
+            .constraints
+            .iter()
+            .all(|constraint| !constraint.a.terms.is_empty()));
 
         let mut original_assignment =
             Assignment::from_field_inputs(generated.input_assignment.clone());

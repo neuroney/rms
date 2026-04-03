@@ -8,6 +8,9 @@ use crate::transform::{choudhuri_transform, eliminate_common_subexpressions, Tra
 use crate::utils::{fr_to_u64, print_constraints};
 use ark_bn254::Fr;
 
+const ZERO_PUBLIC_INPUT_INDEX: usize = 1;
+const FIRST_EXTERNAL_INPUT_INDEX: usize = 2;
+
 #[derive(Clone, Debug)]
 pub struct GreaterThanCircuit {
     pub r1cs: R1CS,
@@ -77,10 +80,10 @@ impl GreaterThanRunConfig {
 pub fn generate_greater_than_r1cs(num_bits: usize) -> GreaterThanCircuit {
     assert!(num_bits > 0, "比较位宽必须大于 0");
 
-    let num_inputs = 1 + 2 * num_bits;
+    let num_inputs = FIRST_EXTERNAL_INPUT_INDEX + 2 * num_bits;
     let mut r1cs = R1CS::new(num_inputs, 0);
 
-    let mut next_input = 1usize;
+    let mut next_input = FIRST_EXTERNAL_INPUT_INDEX;
     let mut alpha_input_indices = Vec::with_capacity(num_bits);
     for _ in 0..num_bits {
         alpha_input_indices.push(next_input);
@@ -98,8 +101,8 @@ pub fn generate_greater_than_r1cs(num_bits: usize) -> GreaterThanCircuit {
     next_w += 1;
     r1cs.add_constraint(
         Constraint {
-            a: LinComb::from_var(Variable::Input(0)),
-            b: LinComb::from_terms(vec![]),
+            a: LinComb::from_var(Variable::Input(ZERO_PUBLIC_INPUT_INDEX)),
+            b: LinComb::from_var(Variable::Witness(1)),
             c: LinComb::from_var(Variable::Witness(zero_witness)),
         },
         zero_witness,
@@ -289,7 +292,7 @@ pub fn export_circuit(
     export_r1cs_bundle_with_inputs(
         &transformed.optimized,
         &generated.config.export_stem,
-        &ExportInputConfig::all_private(generated.circuit.r1cs.num_inputs),
+        &greater_than_export_input_config(generated.circuit.r1cs.num_inputs),
     )
 }
 
@@ -461,7 +464,8 @@ fn build_bit_inputs(
     alpha_bits: &[u64],
     beta_bits: &[u64],
 ) -> Vec<(usize, u64)> {
-    let mut inputs = Vec::with_capacity(alpha_indices.len() + beta_indices.len());
+    let mut inputs = Vec::with_capacity(alpha_indices.len() + beta_indices.len() + 1);
+    inputs.push((ZERO_PUBLIC_INPUT_INDEX, 0));
 
     for (input_idx, bit) in alpha_indices.iter().zip(alpha_bits.iter()) {
         inputs.push((*input_idx, *bit));
@@ -471,6 +475,14 @@ fn build_bit_inputs(
     }
 
     inputs
+}
+
+fn greater_than_export_input_config(num_inputs: usize) -> ExportInputConfig {
+    ExportInputConfig::from_public_values(
+        num_inputs,
+        vec![(ZERO_PUBLIC_INPUT_INDEX, Fr::from(0u64))],
+    )
+    .expect("greater-than fixed zero public input should be valid")
 }
 
 fn read_output(output_witness: usize, assignment: &Assignment) -> u64 {
@@ -557,7 +569,8 @@ mod circuit_tests {
             );
         }
 
-        let mut inputs = Vec::with_capacity(circuit.num_bits * 2);
+        let mut inputs = Vec::with_capacity(circuit.num_bits * 2 + 1);
+        inputs.push((ZERO_PUBLIC_INPUT_INDEX, 0));
         for (bit, input_idx) in circuit.alpha_input_indices.iter().enumerate() {
             inputs.push((*input_idx, (alpha >> bit) & 1));
         }
@@ -582,6 +595,10 @@ mod circuit_tests {
             .constraints
             .iter()
             .all(|constraint| constraint.is_rms_compatible()));
+        assert!(optimized
+            .constraints
+            .iter()
+            .all(|constraint| !constraint.a.terms.is_empty()));
 
         for (alpha, beta, expected) in [
             (0u64, 0u64, 0u64),

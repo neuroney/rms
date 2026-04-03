@@ -101,8 +101,9 @@ cargo test -- --nocapture
 ## Notes
 
 - CLI export artifacts are written under `data/`.
-- Hand-written demos export `x0 = 1` as the only default public input and mark the remaining
-  external inputs as private.
+- Hand-written demos reserve `x0 = 1` as a public constant; demos that need an explicit zero
+  constant may also reserve a fixed public `0` input and mark the remaining external inputs as
+  private.
 - Circom exports preserve declared public/private inputs when the corresponding public values are
   available from the reference witness flow.
 - `page_rank` keeps the Google matrix sparse in the circuit by compiling
