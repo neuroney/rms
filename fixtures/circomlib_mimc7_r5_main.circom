@@ -1,5 +1,5 @@
 pragma circom 2.0.0;
 
-include "circomlib/circuits/mimc.circom";
+include "mimc_fixed_key.circom";
 
-component main {public [x_in, k]} = MiMC7(5);
+component main = MiMC7FixedKey(5);
