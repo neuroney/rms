@@ -2,7 +2,7 @@ use crate::r1cs::{Constraint, LinComb, Variable, R1CS};
 use crate::utils::{lincomb_to_string, var_to_string};
 use ark_bn254::Fr;
 use ark_ff::{One, Zero};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
 
 const DEFAULT_MAX_BLOWUP_FACTOR: usize = 512_000_000_000;
@@ -754,15 +754,37 @@ fn extract_scalar_alias_target(constraint: &Constraint) -> Option<ScaledVariable
 }
 
 pub fn eliminate_common_subexpressions(r1cs: &R1CS) -> (R1CS, usize) {
+    eliminate_common_subexpressions_preserving_witnesses(r1cs, &[])
+}
+
+pub fn eliminate_common_subexpressions_preserving_witnesses(
+    r1cs: &R1CS,
+    preserved_witnesses: &[usize],
+) -> (R1CS, usize) {
     let mut seen: HashMap<String, Variable> = HashMap::new();
     let mut redirect: HashMap<String, ScaledVariable> = HashMap::new();
     let mut new_constraints: Vec<Constraint> = Vec::new();
     let mut new_origin: HashMap<usize, usize> = HashMap::new();
+    let preserved_witnesses = preserved_witnesses.iter().copied().collect::<HashSet<_>>();
 
     for constraint in &r1cs.constraints {
         let normalized = normalize_constraint(constraint, &redirect);
+        let normalized_output = extract_output_var(&normalized.c);
+        let preserve_output = matches!(
+            normalized_output,
+            Some(Variable::Witness(witness)) if preserved_witnesses.contains(&witness)
+        );
+
         if let Some(target) = extract_scalar_alias_target(&normalized) {
-            if let Some(out) = extract_output_var(&normalized.c) {
+            if preserve_output {
+                if let Some(Variable::Witness(i)) = normalized_output {
+                    new_origin.insert(i, new_constraints.len());
+                }
+                new_constraints.push(normalized);
+                continue;
+            }
+
+            if let Some(out) = normalized_output {
                 redirect.insert(var_to_string(&out), target);
             }
             continue;
@@ -770,7 +792,15 @@ pub fn eliminate_common_subexpressions(r1cs: &R1CS) -> (R1CS, usize) {
         let key = constraint_key(&normalized);
 
         if let Some(existing_out) = seen.get(&key) {
-            if let Some(out) = extract_output_var(&normalized.c) {
+            if preserve_output {
+                if let Some(Variable::Witness(i)) = normalized_output {
+                    new_origin.insert(i, new_constraints.len());
+                }
+                new_constraints.push(normalized);
+                continue;
+            }
+
+            if let Some(out) = normalized_output {
                 redirect.insert(
                     var_to_string(&out),
                     ScaledVariable {
@@ -780,7 +810,7 @@ pub fn eliminate_common_subexpressions(r1cs: &R1CS) -> (R1CS, usize) {
                 );
             }
         } else {
-            if let Some(out) = extract_output_var(&normalized.c) {
+            if let Some(out) = normalized_output {
                 seen.insert(key, out.clone());
                 if let Variable::Witness(i) = out {
                     new_origin.insert(i, new_constraints.len());

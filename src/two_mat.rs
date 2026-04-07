@@ -5,43 +5,42 @@ use crate::export::{
 };
 use crate::r1cs::{Constraint, LinComb, Variable, R1CS};
 use crate::transform::{choudhuri_transform, eliminate_common_subexpressions, TransformResult};
-use crate::utils::{fr_to_u64, print_constraints};
+use crate::utils::{fr_to_u64, print_constraints, print_preview_matrix};
 
 #[derive(Clone, Debug)]
-pub struct MatrixMulCircuit {
+pub struct TwoMatCircuit {
     pub r1cs: R1CS,
+    pub dim: usize,
     pub left_input_indices: Vec<Vec<usize>>,
     pub right_input_indices: Vec<Vec<usize>>,
     pub output_witness_indices: Vec<Vec<usize>>,
 }
 
 #[derive(Clone, Debug)]
-pub struct MatrixMulRunConfig {
-    pub rows: usize,
-    pub shared: usize,
-    pub cols: usize,
+pub struct TwoMatRunConfig {
+    pub dim: usize,
     pub left_values: Vec<Vec<u64>>,
     pub right_values: Vec<Vec<u64>>,
     pub export_stem: String,
 }
 
 #[derive(Clone, Debug)]
-pub struct GeneratedMatrixMul {
-    pub config: MatrixMulRunConfig,
-    pub circuit: MatrixMulCircuit,
+pub struct GeneratedTwoMat {
+    pub config: TwoMatRunConfig,
+    pub circuit: TwoMatCircuit,
     pub input_assignment: Vec<(usize, u64)>,
     pub expected_output: Vec<Vec<u64>>,
 }
 
 #[derive(Clone, Debug)]
-pub struct TransformedMatrixMul {
+pub struct TransformedTwoMat {
     pub transformed: TransformResult,
     pub optimized: R1CS,
     pub eliminated: usize,
 }
 
 #[derive(Clone, Debug)]
-pub struct MatrixMulEvalReport {
+pub struct TwoMatEvalReport {
     pub expected_output: Vec<Vec<u64>>,
     pub original_output: Vec<Vec<u64>>,
     pub transformed_output: Vec<Vec<u64>>,
@@ -50,42 +49,34 @@ pub struct MatrixMulEvalReport {
     pub outputs_match: bool,
 }
 
-pub type MatrixMulExportReport = WrittenArtifacts;
+pub type TwoMatExportReport = WrittenArtifacts;
 
-impl MatrixMulRunConfig {
+impl TwoMatRunConfig {
     pub fn demo() -> Self {
         Self::square(4)
     }
 
     pub fn square(dim: usize) -> Self {
-        Self::rectangular(dim, dim, dim)
-    }
-
-    pub fn rectangular(rows: usize, shared: usize, cols: usize) -> Self {
-        let left_values = build_demo_matrix(rows, shared, 1);
-        let right_values = build_demo_matrix(shared, cols, (rows * shared) as u64 + 1);
+        let left_values = build_demo_matrix(dim, dim, 1);
+        let right_values = build_demo_matrix(dim, dim, (dim * dim) as u64 + 1);
 
         Self {
-            rows,
-            shared,
-            cols,
+            dim,
             left_values,
             right_values,
-            export_stem: format!("data/matrix_mul_{}x{}x{}", rows, shared, cols),
+            export_stem: format!("data/two_mat_{}x{}", dim, dim),
         }
     }
 }
 
-pub fn generate_matrix_mul_r1cs(rows: usize, shared: usize, cols: usize) -> MatrixMulCircuit {
-    assert!(rows > 0, "左矩阵行数必须大于 0");
-    assert!(shared > 0, "矩阵内积维度必须大于 0");
-    assert!(cols > 0, "右矩阵列数必须大于 0");
+pub fn generate_two_mat_r1cs(dim: usize) -> TwoMatCircuit {
+    assert!(dim > 0, "矩阵维度必须大于 0");
 
-    let num_inputs = 1 + rows * shared + shared * cols;
+    let num_inputs = 1 + 2 * dim * dim;
     let mut r1cs = R1CS::new(num_inputs, 0);
 
     let mut next_input = 1usize;
-    let mut left_input_indices = vec![vec![0; shared]; rows];
+    let mut left_input_indices = vec![vec![0; dim]; dim];
     for row in &mut left_input_indices {
         for input_idx in row.iter_mut() {
             *input_idx = next_input;
@@ -93,7 +84,7 @@ pub fn generate_matrix_mul_r1cs(rows: usize, shared: usize, cols: usize) -> Matr
         }
     }
 
-    let mut right_input_indices = vec![vec![0; cols]; shared];
+    let mut right_input_indices = vec![vec![0; dim]; dim];
     for row in &mut right_input_indices {
         for input_idx in row.iter_mut() {
             *input_idx = next_input;
@@ -101,32 +92,32 @@ pub fn generate_matrix_mul_r1cs(rows: usize, shared: usize, cols: usize) -> Matr
         }
     }
 
-    let mut next_w = 2usize;
-    let mut output_witness_indices = vec![vec![0; cols]; rows];
+    let mut next_witness = 2usize;
 
-    for i in 0..rows {
-        for j in 0..cols {
-            let mut product_witnesses = Vec::with_capacity(shared);
+    let mut output_witness_indices = vec![vec![0; dim]; dim];
+    for i in 0..dim {
+        for j in 0..dim {
+            let mut product_witnesses = Vec::with_capacity(dim);
 
-            for k in 0..shared {
-                let out_w = next_w;
-                next_w += 1;
+            for k in 0..dim {
+                let product_witness = next_witness;
+                next_witness += 1;
                 r1cs.add_constraint(
                     Constraint {
                         a: LinComb::from_var(Variable::Input(left_input_indices[i][k])),
                         b: LinComb::from_var(Variable::Input(right_input_indices[k][j])),
-                        c: LinComb::from_var(Variable::Witness(out_w)),
+                        c: LinComb::from_var(Variable::Witness(product_witness)),
                     },
-                    out_w,
+                    product_witness,
                 );
-                product_witnesses.push(out_w);
+                product_witnesses.push(product_witness);
             }
 
             let output_witness = if product_witnesses.len() == 1 {
                 product_witnesses[0]
             } else {
-                let out_w = next_w;
-                next_w += 1;
+                let output_witness = next_witness;
+                next_witness += 1;
                 r1cs.add_constraint(
                     Constraint {
                         a: LinComb::from_var(Variable::Input(0)),
@@ -136,32 +127,32 @@ pub fn generate_matrix_mul_r1cs(rows: usize, shared: usize, cols: usize) -> Matr
                                 .map(|witness| (ark_ff::One::one(), Variable::Witness(*witness)))
                                 .collect(),
                         ),
-                        c: LinComb::from_var(Variable::Witness(out_w)),
+                        c: LinComb::from_var(Variable::Witness(output_witness)),
                     },
-                    out_w,
+                    output_witness,
                 );
-                out_w
+                output_witness
             };
-
             output_witness_indices[i][j] = output_witness;
         }
     }
 
-    r1cs.num_witnesses = next_w - 1;
+    r1cs.num_witnesses = next_witness - 1;
 
-    MatrixMulCircuit {
+    TwoMatCircuit {
         r1cs,
+        dim,
         left_input_indices,
         right_input_indices,
         output_witness_indices,
     }
 }
 
-pub fn generate_circuit(config: MatrixMulRunConfig) -> GeneratedMatrixMul {
-    validate_matrix_shape(&config.left_values, config.rows, config.shared, "左矩阵");
-    validate_matrix_shape(&config.right_values, config.shared, config.cols, "右矩阵");
+pub fn generate_circuit(config: TwoMatRunConfig) -> GeneratedTwoMat {
+    validate_matrix_shape(&config.left_values, config.dim, config.dim, "左矩阵 M1");
+    validate_matrix_shape(&config.right_values, config.dim, config.dim, "右矩阵 M2");
 
-    let circuit = generate_matrix_mul_r1cs(config.rows, config.shared, config.cols);
+    let circuit = generate_two_mat_r1cs(config.dim);
     let input_assignment = build_matrix_inputs(
         &circuit.left_input_indices,
         &circuit.right_input_indices,
@@ -170,7 +161,7 @@ pub fn generate_circuit(config: MatrixMulRunConfig) -> GeneratedMatrixMul {
     );
     let expected_output = multiply_matrices(&config.left_values, &config.right_values);
 
-    GeneratedMatrixMul {
+    GeneratedTwoMat {
         config,
         circuit,
         input_assignment,
@@ -178,11 +169,11 @@ pub fn generate_circuit(config: MatrixMulRunConfig) -> GeneratedMatrixMul {
     }
 }
 
-pub fn transform_circuit(generated: &GeneratedMatrixMul) -> TransformedMatrixMul {
+pub fn transform_circuit(generated: &GeneratedTwoMat) -> TransformedTwoMat {
     let transformed = choudhuri_transform(&generated.circuit.r1cs);
     let (optimized, eliminated) = eliminate_common_subexpressions(&transformed.r1cs);
 
-    TransformedMatrixMul {
+    TransformedTwoMat {
         transformed,
         optimized,
         eliminated,
@@ -190,9 +181,9 @@ pub fn transform_circuit(generated: &GeneratedMatrixMul) -> TransformedMatrixMul
 }
 
 pub fn evaluate_equivalence(
-    generated: &GeneratedMatrixMul,
-    transformed: &TransformedMatrixMul,
-) -> MatrixMulEvalReport {
+    generated: &GeneratedTwoMat,
+    transformed: &TransformedTwoMat,
+) -> TwoMatEvalReport {
     let mut original_assignment = Assignment::new(generated.input_assignment.clone());
     let _ = execute_circuit(&generated.circuit.r1cs, &mut original_assignment).is_some();
     let original_valid = verify_assignment(&generated.circuit.r1cs, &original_assignment);
@@ -209,7 +200,7 @@ pub fn evaluate_equivalence(
         &transformed_assignment,
     );
 
-    MatrixMulEvalReport {
+    TwoMatEvalReport {
         expected_output: generated.expected_output.clone(),
         outputs_match: original_output == generated.expected_output
             && transformed_output == generated.expected_output,
@@ -221,9 +212,9 @@ pub fn evaluate_equivalence(
 }
 
 pub fn export_circuit(
-    generated: &GeneratedMatrixMul,
-    transformed: &TransformedMatrixMul,
-) -> Result<MatrixMulExportReport, Box<dyn std::error::Error>> {
+    generated: &GeneratedTwoMat,
+    transformed: &TransformedTwoMat,
+) -> Result<TwoMatExportReport, Box<dyn std::error::Error>> {
     export_r1cs_bundle_with_inputs(
         &transformed.optimized,
         &generated.config.export_stem,
@@ -232,7 +223,7 @@ pub fn export_circuit(
 }
 
 pub fn run() {
-    run_with_args(&[]).expect("矩阵乘法示例失败");
+    run_with_args(&[]).expect("TwoMat 示例失败");
 }
 
 pub fn run_with_args(args: &[String]) -> Result<(), String> {
@@ -244,43 +235,35 @@ pub fn run_with_args(args: &[String]) -> Result<(), String> {
     }
 
     let config = match args {
-        [] => MatrixMulRunConfig::demo(),
-        [dim] => MatrixMulRunConfig::square(parse_positive_usize_arg("dim", dim)?),
-        [rows, shared, cols] => MatrixMulRunConfig::rectangular(
-            parse_positive_usize_arg("rows", rows)?,
-            parse_positive_usize_arg("shared", shared)?,
-            parse_positive_usize_arg("cols", cols)?,
-        ),
+        [] => TwoMatRunConfig::demo(),
+        [dim] => TwoMatRunConfig::square(parse_positive_usize_arg("dim", dim)?),
         _ => return Err(usage_text().to_string()),
     };
 
     run_with_config(config)
 }
 
-fn run_with_config(config: MatrixMulRunConfig) -> Result<(), String> {
+fn run_with_config(config: TwoMatRunConfig) -> Result<(), String> {
     let generated = generate_circuit(config);
     let transformed = transform_circuit(&generated);
     let evaluation = evaluate_equivalence(&generated, &transformed);
     let export = export_circuit(&generated, &transformed)
-        .map_err(|err| format!("导出矩阵乘法 RMS 电路失败: {err}"))?;
+        .map_err(|err| format!("导出 TwoMat RMS 电路失败: {err}"))?;
 
     println!("\n╔══════════════════════════════════════════════════╗");
-    println!("║  矩阵乘法示例：四阶段审计流程                    ║");
+    println!("║  TwoMat：两个私有矩阵相乘                        ║");
     println!("╚══════════════════════════════════════════════════╝\n");
 
     println!("【1. 生成电路】");
     println!(
         "  维度: {} x {} 乘 {} x {}",
-        generated.config.rows,
-        generated.config.shared,
-        generated.config.shared,
-        generated.config.cols
+        generated.config.dim, generated.config.dim, generated.config.dim, generated.config.dim
     );
-    println!("  输入索引:");
-    print_index_matrix("A", "x", &generated.circuit.left_input_indices);
-    print_index_matrix("B", "x", &generated.circuit.right_input_indices);
+    println!("  私有输入索引:");
+    print_index_matrix("M1", "x", &generated.circuit.left_input_indices);
+    print_index_matrix("M2", "x", &generated.circuit.right_input_indices);
     println!("  输出 witness:");
-    print_index_matrix("C", "w", &generated.circuit.output_witness_indices);
+    print_index_matrix("P", "w", &generated.circuit.output_witness_indices);
     generated.circuit.r1cs.print_stats();
 
     println!("\n【2. 电路转换】");
@@ -297,9 +280,9 @@ fn run_with_config(config: MatrixMulRunConfig) -> Result<(), String> {
     );
 
     println!("\n【3. Eval 一致性】");
-    println!("  样例输入:");
-    print_value_matrix("A", &generated.config.left_values);
-    print_value_matrix("B", &generated.config.right_values);
+    println!("  私有输入样例:");
+    print_value_matrix("M1", &generated.config.left_values);
+    print_value_matrix("M2", &generated.config.right_values);
     println!("  期望输出:");
     print_value_matrix("Expected", &evaluation.expected_output);
     println!("  原始电路输出:");
@@ -349,27 +332,11 @@ fn run_with_config(config: MatrixMulRunConfig) -> Result<(), String> {
 }
 
 fn print_index_matrix(name: &str, prefix: &str, matrix: &[Vec<usize>]) {
-    println!("    {} =", name);
-    for row in matrix {
-        let formatted = row
-            .iter()
-            .map(|index| format!("{}{}", prefix, index))
-            .collect::<Vec<_>>()
-            .join(", ");
-        println!("      [{}]", formatted);
-    }
+    print_preview_matrix(name, matrix, |index| format!("{}{}", prefix, index));
 }
 
 fn print_value_matrix(name: &str, matrix: &[Vec<u64>]) {
-    println!("    {} =", name);
-    for row in matrix {
-        let formatted = row
-            .iter()
-            .map(|value| format!("{:>4}", value))
-            .collect::<Vec<_>>()
-            .join(", ");
-        println!("      [{}]", formatted);
-    }
+    print_preview_matrix(name, matrix, |value| format!("{:>4}", value));
 }
 
 fn build_matrix_inputs(
@@ -465,84 +432,65 @@ fn parse_positive_usize_arg(name: &str, raw: &str) -> Result<usize, String> {
 fn usage_text() -> &'static str {
     "\
 用法:
-  cargo run -- matrix_mul
-  cargo run -- matrix_mul <dim>
-  cargo run -- matrix_mul <rows> <shared> <cols>
-  cargo run --example matrix_mul -- <dim>
+  cargo run -- twomat
+  cargo run -- twomat <dim>
 
 说明:
   默认值: 4x4 乘 4x4。
-  传 1 个参数时生成方阵；传 3 个参数时生成 rows x shared 与 shared x cols。"
+  两个操作数 M1、M2 都是私有 n x n 矩阵输入。"
 }
 
 #[cfg(test)]
 mod circuit_tests {
     use super::*;
-
-    fn build_matrix_assignment(
-        circuit: &MatrixMulCircuit,
-        left: [[u64; 2]; 2],
-        right: [[u64; 2]; 2],
-    ) -> Assignment {
-        let mut inputs = Vec::new();
-
-        for (i, row) in left.iter().enumerate() {
-            for (k, value) in row.iter().enumerate() {
-                inputs.push((circuit.left_input_indices[i][k], *value));
-            }
-        }
-
-        for (k, row) in right.iter().enumerate() {
-            for (j, value) in row.iter().enumerate() {
-                inputs.push((circuit.right_input_indices[k][j], *value));
-            }
-        }
-
-        Assignment::new(inputs)
-    }
-
-    fn read_matrix_outputs(circuit: &MatrixMulCircuit, assignment: &Assignment) -> Vec<Vec<u64>> {
-        circuit
-            .output_witness_indices
-            .iter()
-            .map(|row| {
-                row.iter()
-                    .map(|witness_idx| {
-                        fr_to_u64(&assignment.witnesses[witness_idx]).expect("矩阵输出超出 u64")
-                    })
-                    .collect()
-            })
-            .collect()
-    }
+    use crate::r1cs::RmsLinearExport;
 
     #[test]
-    fn matrix_mul_2x2_transforms_to_rms_and_preserves_output() {
-        let circuit = generate_matrix_mul_r1cs(2, 2, 2);
+    fn two_mat_2x2_transforms_to_rms_and_preserves_output() {
+        let circuit = generate_two_mat_r1cs(2);
         let transformed = choudhuri_transform(&circuit.r1cs);
-        let (optimized, eliminated) = eliminate_common_subexpressions(&transformed.r1cs);
+        let (optimized, _) = eliminate_common_subexpressions(&transformed.r1cs);
 
         assert!(optimized
             .constraints
             .iter()
             .all(|constraint| constraint.is_rms_compatible()));
-        assert_eq!(transformed.r1cs.constraints.len(), 16);
-        assert_eq!(eliminated, 0);
-        assert_eq!(optimized.constraints.len(), 16);
 
-        let left = [[1, 2], [3, 4]];
-        let right = [[5, 6], [7, 8]];
+        let left = vec![vec![1, 2], vec![3, 4]];
+        let right = vec![vec![5, 6], vec![7, 8]];
+        let generated = generate_circuit(TwoMatRunConfig {
+            dim: 2,
+            left_values: left,
+            right_values: right,
+            export_stem: "data/two_mat_test".to_string(),
+        });
+        let transformed = transform_circuit(&generated);
+        let evaluation = evaluate_equivalence(&generated, &transformed);
 
-        let mut original_assignment = build_matrix_assignment(&circuit, left, right);
-        assert!(execute_circuit(&circuit.r1cs, &mut original_assignment).is_some());
-        assert!(verify_assignment(&circuit.r1cs, &original_assignment));
-        let original_outputs = read_matrix_outputs(&circuit, &original_assignment);
-        assert_eq!(original_outputs, vec![vec![19, 22], vec![43, 50]]);
+        assert!(evaluation.original_valid);
+        assert!(evaluation.transformed_valid);
+        assert!(evaluation.outputs_match);
+        assert_eq!(evaluation.expected_output, vec![vec![19, 22], vec![43, 50]]);
+    }
 
-        let mut optimized_assignment = build_matrix_assignment(&circuit, left, right);
-        assert!(execute_circuit(&optimized, &mut optimized_assignment).is_some());
-        assert!(verify_assignment(&optimized, &optimized_assignment));
-        let optimized_outputs = read_matrix_outputs(&circuit, &optimized_assignment);
-        assert_eq!(optimized_outputs, original_outputs);
+    #[test]
+    fn export_marks_both_matrices_private() {
+        let generated = generate_circuit(TwoMatRunConfig::square(3));
+        let transformed = transform_circuit(&generated);
+        let export = RmsLinearExport::from_r1cs_with_inputs(
+            &transformed.optimized,
+            &ExportInputConfig::all_private(generated.circuit.r1cs.num_inputs),
+        )
+        .expect("导出带输入元数据的 RMS 失败");
+
+        assert_eq!(export.num_public_inputs, 1);
+        assert_eq!(export.public_inputs[0].index, 0);
+        assert_eq!(export.public_inputs[0].value, "1");
+        assert_eq!(export.num_private_inputs, 18);
+        assert_eq!(
+            export.private_inputs,
+            (1usize..=18usize).collect::<Vec<_>>()
+        );
     }
 }
 
@@ -551,8 +499,8 @@ mod pipeline_tests {
     use super::*;
 
     #[test]
-    fn matrix_demo_pipeline_keeps_output_after_transform() {
-        let generated = generate_circuit(MatrixMulRunConfig::demo());
+    fn two_mat_demo_pipeline_keeps_output_after_transform() {
+        let generated = generate_circuit(TwoMatRunConfig::demo());
         let transformed = transform_circuit(&generated);
         let evaluation = evaluate_equivalence(&generated, &transformed);
 

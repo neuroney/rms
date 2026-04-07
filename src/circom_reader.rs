@@ -1782,10 +1782,8 @@ mod tests {
 
     #[test]
     fn imports_official_circomlib_and_fixture_and_preserves_truth_table() {
-        let imported = import_circom_constraints_json(
-            "/Users/neuroney/CodeSpace/rms/fixtures/circomlib_and_o0.json",
-        )
-        .expect("导入 circomlib AND fixture 失败");
+        let imported = import_circom_constraints_json("./fixtures/circomlib_and.json")
+            .expect("导入 circomlib AND fixture 失败");
 
         assert_eq!(imported.original_constraints, 1);
         assert_eq!(imported.input_signal_ids, vec![2, 3]);

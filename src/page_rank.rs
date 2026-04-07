@@ -4,37 +4,54 @@ use crate::export::{
     WrittenArtifacts,
 };
 use crate::r1cs::{Constraint, LinComb, Variable, R1CS};
-use crate::transform::{choudhuri_transform, eliminate_common_subexpressions, TransformResult};
-use crate::utils::print_constraints;
+use crate::transform::{
+    choudhuri_transform, eliminate_common_subexpressions_preserving_witnesses, TransformResult,
+};
+use crate::utils::{
+    format_preview_list, print_constraints, print_preview_matrix, PREVIEW_MAX_MATRIX_ROWS,
+    PREVIEW_MAX_VECTOR_ITEMS,
+};
 use ark_bn254::Fr;
 use ark_ff::{Field, One, Zero};
 use rand::{rngs::StdRng, Rng, SeedableRng};
+use std::collections::BTreeSet;
 
 pub const DEFAULT_NUM_VERTICES: usize = 16;
 pub const DEFAULT_ITERATIONS: usize = 5;
 pub const DEFAULT_TARGET_OUT_DEGREE: usize = 8;
 pub const DEFAULT_SEED: u64 = 42;
-const ZERO_PUBLIC_INPUT_INDEX: usize = 1;
-const FIRST_EXTERNAL_INPUT_INDEX: usize = 2;
+pub const DEFAULT_ALPHA_NUM: u64 = 17;
+pub const DEFAULT_ALPHA_DEN: u64 = 20;
+const FIRST_EXTERNAL_INPUT_INDEX: usize = 1;
+const PROBABILITY_EPSILON: f64 = 1e-9;
+
+#[derive(Clone, Debug)]
+pub struct SparseEdgeInput {
+    pub source: usize,
+    pub target: usize,
+    pub weight: Fr,
+    pub weight_approx: f64,
+}
 
 #[derive(Clone, Debug)]
 pub struct PageRankCircuit {
     pub r1cs: R1CS,
     pub num_vertices: usize,
     pub num_iterations: usize,
+    pub edge_weight_input_indices: Vec<usize>,
     pub initial_rank_input_indices: Vec<usize>,
     pub iteration_rank_witness_indices: Vec<Vec<usize>>,
-    pub total_mass_witness_indices: Vec<usize>,
-    pub dangling_mass_witness_indices: Vec<usize>,
-    pub teleport_scalar_witness_indices: Vec<usize>,
+    pub residual_scaled_witness_indices: Vec<Vec<usize>>,
+    pub residual_total_witness_indices: Vec<usize>,
     pub output_witness_indices: Vec<usize>,
 }
 
 #[derive(Clone, Debug)]
 pub struct PageRankRunConfig {
-    pub adjacency: Vec<Vec<u8>>,
-    pub alpha_num: u64,
-    pub alpha_den: u64,
+    pub num_vertices: usize,
+    pub edge_weights: Vec<SparseEdgeInput>,
+    pub initial_rank: Vec<Fr>,
+    pub initial_rank_approx: Vec<f64>,
     pub iterations: usize,
     pub export_stem: String,
 }
@@ -43,17 +60,17 @@ pub struct PageRankRunConfig {
 pub struct CompiledPageRank {
     pub num_vertices: usize,
     pub iterations: usize,
-    pub adjacency: Vec<Vec<u8>>,
-    pub alpha: Fr,
-    pub one_minus_alpha: Fr,
-    pub alpha_approx: f64,
+    pub support: Vec<Vec<u8>>,
+    pub edge_weights: Vec<SparseEdgeInput>,
     pub teleport: Vec<Fr>,
     pub teleport_approx: Vec<f64>,
     pub out_degrees: Vec<usize>,
-    pub dangling_vertices: Vec<usize>,
-    pub source_weights: Vec<Option<Fr>>,
-    pub source_weights_approx: Vec<Option<f64>>,
-    pub incoming_sources: Vec<Vec<usize>>,
+    pub outgoing_edge_indices: Vec<Vec<usize>>,
+    pub incoming_edge_indices: Vec<Vec<usize>>,
+    pub row_weight_sums: Vec<Fr>,
+    pub row_weight_sums_approx: Vec<f64>,
+    pub residual_mass: Vec<Fr>,
+    pub residual_mass_approx: Vec<f64>,
 }
 
 #[derive(Clone, Debug)]
@@ -99,22 +116,58 @@ impl PageRankRunConfig {
 
     pub fn sampled(num_vertices: usize, iterations: usize, seed: u64) -> Self {
         let adjacency = sample_sparse_directed_graph(num_vertices, DEFAULT_TARGET_OUT_DEGREE, seed);
+        let edge_weights = build_private_edge_weights_from_adjacency(
+            &adjacency,
+            DEFAULT_ALPHA_NUM,
+            DEFAULT_ALPHA_DEN,
+        );
+        let (initial_rank, initial_rank_approx) =
+            build_sample_rank_vector(num_vertices, seed.wrapping_add(1));
+
         Self {
-            export_stem: format!("data/page_rank_{}v_{}iter", num_vertices, iterations),
-            adjacency,
-            alpha_num: 17,
-            alpha_den: 20,
+            num_vertices,
+            edge_weights,
+            initial_rank,
+            initial_rank_approx,
             iterations,
+            export_stem: format!("data/page_rank_{}v_{}iter", num_vertices, iterations),
         }
     }
 
     pub fn from_adjacency(adjacency: Vec<Vec<u8>>, iterations: usize) -> Self {
+        validate_adjacency(&adjacency);
+        let num_vertices = adjacency.len();
+        let edge_weights = build_private_edge_weights_from_adjacency(
+            &adjacency,
+            DEFAULT_ALPHA_NUM,
+            DEFAULT_ALPHA_DEN,
+        );
+        let (initial_rank, initial_rank_approx) = build_uniform_rank_vector(num_vertices);
+
         Self {
-            export_stem: format!("data/page_rank_{}v_{}iter", adjacency.len(), iterations),
-            adjacency,
-            alpha_num: 17,
-            alpha_den: 20,
+            num_vertices,
+            edge_weights,
+            initial_rank,
+            initial_rank_approx,
             iterations,
+            export_stem: format!("data/page_rank_{}v_{}iter", num_vertices, iterations),
+        }
+    }
+
+    pub fn from_sparse_private_inputs(
+        num_vertices: usize,
+        edge_weights: Vec<SparseEdgeInput>,
+        initial_rank: Vec<Fr>,
+        initial_rank_approx: Vec<f64>,
+        iterations: usize,
+    ) -> Self {
+        Self {
+            num_vertices,
+            edge_weights,
+            initial_rank,
+            initial_rank_approx,
+            iterations,
+            export_stem: format!("data/page_rank_{}v_{}iter_custom", num_vertices, iterations),
         }
     }
 }
@@ -123,24 +176,18 @@ pub fn generate_page_rank_r1cs(compiled: &CompiledPageRank) -> PageRankCircuit {
     assert!(compiled.num_vertices > 0, "PageRank 顶点数必须大于 0");
     assert!(compiled.iterations > 0, "PageRank 迭代次数必须大于 0");
 
-    let num_inputs = FIRST_EXTERNAL_INPUT_INDEX + compiled.num_vertices;
+    let num_inputs =
+        FIRST_EXTERNAL_INPUT_INDEX + compiled.edge_weights.len() + compiled.num_vertices;
     let mut r1cs = R1CS::new(num_inputs, 0);
 
-    let initial_rank_input_indices = (FIRST_EXTERNAL_INPUT_INDEX
-        ..FIRST_EXTERNAL_INPUT_INDEX + compiled.num_vertices)
+    let edge_weight_input_indices = (FIRST_EXTERNAL_INPUT_INDEX
+        ..FIRST_EXTERNAL_INPUT_INDEX + compiled.edge_weights.len())
+        .collect::<Vec<_>>();
+    let initial_rank_input_indices = (FIRST_EXTERNAL_INPUT_INDEX + compiled.edge_weights.len()
+        ..FIRST_EXTERNAL_INPUT_INDEX + compiled.edge_weights.len() + compiled.num_vertices)
         .collect::<Vec<_>>();
 
     let mut next_witness = 2usize;
-    let zero_witness = next_witness;
-    next_witness += 1;
-    r1cs.add_constraint(
-        Constraint {
-            a: LinComb::from_var(Variable::Input(ZERO_PUBLIC_INPUT_INDEX)),
-            b: LinComb::from_var(Variable::Witness(1)),
-            c: LinComb::from_var(Variable::Witness(zero_witness)),
-        },
-        zero_witness,
-    );
 
     let mut current_rank_witnesses = Vec::with_capacity(compiled.num_vertices);
     for &input_idx in &initial_rank_input_indices {
@@ -158,85 +205,62 @@ pub fn generate_page_rank_r1cs(compiled: &CompiledPageRank) -> PageRankCircuit {
     }
 
     let mut iteration_rank_witness_indices = vec![current_rank_witnesses.clone()];
-    let mut total_mass_witness_indices = Vec::with_capacity(compiled.iterations);
-    let mut dangling_mass_witness_indices = Vec::with_capacity(compiled.iterations);
-    let mut teleport_scalar_witness_indices = Vec::with_capacity(compiled.iterations);
+    let mut residual_scaled_witness_indices = Vec::with_capacity(compiled.iterations);
+    let mut residual_total_witness_indices = Vec::with_capacity(compiled.iterations);
 
     for _ in 0..compiled.iterations {
-        let total_mass_witness = next_witness;
-        next_witness += 1;
-        r1cs.add_constraint(
-            Constraint {
-                a: LinComb::from_var(Variable::Input(0)),
-                b: witness_sum_lincomb(&current_rank_witnesses),
-                c: LinComb::from_var(Variable::Witness(total_mass_witness)),
-            },
-            total_mass_witness,
-        );
-        total_mass_witness_indices.push(total_mass_witness);
-
-        let dangling_mass_witness = if compiled.dangling_vertices.is_empty() {
-            zero_witness
-        } else {
-            let witness_idx = next_witness;
-            next_witness += 1;
-            r1cs.add_constraint(
-                Constraint {
-                    a: LinComb::from_var(Variable::Input(0)),
-                    b: witness_sum_lincomb(
-                        &compiled
-                            .dangling_vertices
-                            .iter()
-                            .map(|&vertex| current_rank_witnesses[vertex])
-                            .collect::<Vec<_>>(),
-                    ),
-                    c: LinComb::from_var(Variable::Witness(witness_idx)),
-                },
-                witness_idx,
-            );
-            witness_idx
-        };
-        dangling_mass_witness_indices.push(dangling_mass_witness);
-
-        let teleport_scalar_witness = next_witness;
-        next_witness += 1;
-        let mut teleport_scalar_terms = Vec::with_capacity(2);
-        if !compiled.one_minus_alpha.is_zero() {
-            teleport_scalar_terms.push((
-                compiled.one_minus_alpha,
-                Variable::Witness(total_mass_witness),
-            ));
-        }
-        if !compiled.alpha.is_zero() {
-            teleport_scalar_terms.push((compiled.alpha, Variable::Witness(dangling_mass_witness)));
-        }
-        r1cs.add_constraint(
-            Constraint {
-                a: LinComb::from_var(Variable::Input(0)),
-                b: LinComb::from_terms(teleport_scalar_terms),
-                c: LinComb::from_var(Variable::Witness(teleport_scalar_witness)),
-            },
-            teleport_scalar_witness,
-        );
-        teleport_scalar_witness_indices.push(teleport_scalar_witness);
-
-        let mut scaled_source_witnesses = vec![zero_witness; compiled.num_vertices];
+        let mut residual_scaled_sources = Vec::with_capacity(compiled.num_vertices);
         for source in 0..compiled.num_vertices {
-            let Some(weight) = compiled.source_weights[source] else {
-                continue;
-            };
-
             let witness_idx = next_witness;
             next_witness += 1;
+
+            let mut residual_terms =
+                Vec::with_capacity(1 + compiled.outgoing_edge_indices[source].len());
+            residual_terms.push((Fr::one(), Variable::Input(0)));
+            for &edge_idx in &compiled.outgoing_edge_indices[source] {
+                residual_terms.push((
+                    -Fr::one(),
+                    Variable::Input(edge_weight_input_indices[edge_idx]),
+                ));
+            }
+
             r1cs.add_constraint(
                 Constraint {
-                    a: LinComb::from_terms(vec![(weight, Variable::Input(0))]),
+                    a: LinComb::from_terms(residual_terms),
                     b: LinComb::from_var(Variable::Witness(current_rank_witnesses[source])),
                     c: LinComb::from_var(Variable::Witness(witness_idx)),
                 },
                 witness_idx,
             );
-            scaled_source_witnesses[source] = witness_idx;
+            residual_scaled_sources.push(witness_idx);
+        }
+        residual_scaled_witness_indices.push(residual_scaled_sources.clone());
+
+        let residual_total_witness = next_witness;
+        next_witness += 1;
+        r1cs.add_constraint(
+            Constraint {
+                a: LinComb::from_var(Variable::Input(0)),
+                b: witness_sum_lincomb(&residual_scaled_sources),
+                c: LinComb::from_var(Variable::Witness(residual_total_witness)),
+            },
+            residual_total_witness,
+        );
+        residual_total_witness_indices.push(residual_total_witness);
+
+        let mut edge_contrib_witnesses = Vec::with_capacity(compiled.edge_weights.len());
+        for (edge_idx, edge) in compiled.edge_weights.iter().enumerate() {
+            let witness_idx = next_witness;
+            next_witness += 1;
+            r1cs.add_constraint(
+                Constraint {
+                    a: LinComb::from_var(Variable::Input(edge_weight_input_indices[edge_idx])),
+                    b: LinComb::from_var(Variable::Witness(current_rank_witnesses[edge.source])),
+                    c: LinComb::from_var(Variable::Witness(witness_idx)),
+                },
+                witness_idx,
+            );
+            edge_contrib_witnesses.push(witness_idx);
         }
 
         let mut next_rank_witnesses = Vec::with_capacity(compiled.num_vertices);
@@ -246,7 +270,7 @@ pub fn generate_page_rank_r1cs(compiled: &CompiledPageRank) -> PageRankCircuit {
             r1cs.add_constraint(
                 Constraint {
                     a: LinComb::from_terms(vec![(compiled.teleport[target], Variable::Input(0))]),
-                    b: LinComb::from_var(Variable::Witness(teleport_scalar_witness)),
+                    b: LinComb::from_var(Variable::Witness(residual_total_witness)),
                     c: LinComb::from_var(Variable::Witness(teleport_term_witness)),
                 },
                 teleport_term_witness,
@@ -254,20 +278,16 @@ pub fn generate_page_rank_r1cs(compiled: &CompiledPageRank) -> PageRankCircuit {
 
             let next_rank_witness = next_witness;
             next_witness += 1;
-            let mut terms = compiled.incoming_sources[target]
+            let mut terms = compiled.incoming_edge_indices[target]
                 .iter()
-                .map(|&source| {
+                .map(|&edge_idx| {
                     (
                         Fr::one(),
-                        Variable::Witness(scaled_source_witnesses[source]),
+                        Variable::Witness(edge_contrib_witnesses[edge_idx]),
                     )
                 })
                 .collect::<Vec<_>>();
             terms.push((Fr::one(), Variable::Witness(teleport_term_witness)));
-            terms.push((
-                Fr::from((target + 1) as u64),
-                Variable::Witness(zero_witness),
-            ));
 
             r1cs.add_constraint(
                 Constraint {
@@ -291,11 +311,11 @@ pub fn generate_page_rank_r1cs(compiled: &CompiledPageRank) -> PageRankCircuit {
         r1cs,
         num_vertices: compiled.num_vertices,
         num_iterations: compiled.iterations,
+        edge_weight_input_indices,
         initial_rank_input_indices,
         iteration_rank_witness_indices,
-        total_mass_witness_indices,
-        dangling_mass_witness_indices,
-        teleport_scalar_witness_indices,
+        residual_scaled_witness_indices,
+        residual_total_witness_indices,
     }
 }
 
@@ -304,9 +324,14 @@ pub fn generate_circuit(config: PageRankRunConfig) -> GeneratedPageRank {
 
     let compiled = compile_page_rank(&config);
     let circuit = generate_page_rank_r1cs(&compiled);
-    let (initial_rank, initial_rank_approx) = build_uniform_rank_vector(compiled.num_vertices);
-    let input_assignment =
-        build_initial_rank_inputs(&circuit.initial_rank_input_indices, &initial_rank);
+    let initial_rank = config.initial_rank.clone();
+    let initial_rank_approx = config.initial_rank_approx.clone();
+    let input_assignment = build_private_input_assignment(
+        &circuit.edge_weight_input_indices,
+        &compiled.edge_weights,
+        &circuit.initial_rank_input_indices,
+        &initial_rank,
+    );
     let expected_output = simulate_sparse_field(&compiled, &initial_rank);
     let expected_output_approx = simulate_sparse_f64(&compiled, &initial_rank_approx);
 
@@ -324,7 +349,10 @@ pub fn generate_circuit(config: PageRankRunConfig) -> GeneratedPageRank {
 
 pub fn transform_circuit(generated: &GeneratedPageRank) -> TransformedPageRank {
     let transformed = choudhuri_transform(&generated.circuit.r1cs);
-    let (optimized, eliminated) = eliminate_common_subexpressions(&transformed.r1cs);
+    let (optimized, eliminated) = eliminate_common_subexpressions_preserving_witnesses(
+        &transformed.r1cs,
+        &generated.circuit.output_witness_indices,
+    );
 
     TransformedPageRank {
         transformed,
@@ -413,45 +441,41 @@ fn run_with_config(config: PageRankRunConfig) -> Result<(), String> {
     let export = export_circuit(&generated, &transformed)
         .map_err(|err| format!("导出 PageRank RMS 电路失败: {err}"))?;
 
-    let google_matrix = build_google_matrix_approx(
-        &generated.compiled.adjacency,
-        generated.compiled.alpha_approx,
-        &generated.compiled.teleport_approx,
-        &generated.compiled.out_degrees,
-    );
+    let audit_matrix = build_transition_matrix_approx(&generated.compiled);
 
-    println!("\n╔══════════════════════════════════════════════════╗");
-    println!("║  PageRank 示例：稀疏传播 + dangling + teleport   ║");
-    println!("╚══════════════════════════════════════════════════╝\n");
+    println!("\n╔══════════════════════════════════════════════════════╗");
+    println!("║  PageRank 示例：公开稀疏支撑 + 私有边权/初始 rank   ║");
+    println!("╚══════════════════════════════════════════════════════╝\n");
 
     println!("【1. 生成电路】");
     println!("  顶点数: {}", generated.compiled.num_vertices);
+    println!("  稀疏边数: {}", generated.compiled.edge_weights.len());
     println!(
-        "  平均出度: {:.2}",
+        "  平均公开出度: {:.2}",
         average_out_degree(&generated.compiled.out_degrees)
     );
-    println!("  迭代次数: {}", generated.compiled.iterations);
     println!(
-        "  alpha = {}/{} ≈ {:.6}",
-        generated.config.alpha_num, generated.config.alpha_den, generated.compiled.alpha_approx
+        "  demo 采样权重: alpha = {}/{}（仅用于生成私有边权）",
+        DEFAULT_ALPHA_NUM, DEFAULT_ALPHA_DEN
+    );
+    println!("  公开稀疏支撑 S:");
+    print_adjacency_matrix(&generated.compiled.support);
+    println!("  私有边权 W_sparse（仅 demo 审计打印）:");
+    print_private_edge_weights(
+        &generated.compiled.edge_weights,
+        &generated.compiled.outgoing_edge_indices,
+    );
+    println!("  每行私有权重和 / teleport residual:");
+    print_row_mass_summary(
+        &generated.compiled.row_weight_sums_approx,
+        &generated.compiled.residual_mass_approx,
     );
     println!(
-        "  dangling 顶点: {}",
-        format_vertex_list(&generated.compiled.dangling_vertices)
-    );
-    println!("  邻接矩阵 A:");
-    print_adjacency_matrix(&generated.compiled.adjacency);
-    println!("  稀疏源权重 alpha / d_i:");
-    print_source_weights(
-        &generated.compiled.out_degrees,
-        &generated.compiled.source_weights_approx,
-    );
-    println!("  仅用于审计的 Google 矩阵 G（电路实际不显式展开它）:");
-    print_approx_matrix("G", &google_matrix);
-    println!(
-        "  初始 rank r^(0): {}",
+        "  私有初始 rank r^(0): {}",
         format_approx_vector(&generated.initial_rank_approx)
     );
+    println!("  仅用于审计的密集转移矩阵 G:");
+    print_approx_matrix("G", &audit_matrix);
     generated.circuit.r1cs.print_stats();
 
     println!("\n【2. 电路转换】");
@@ -515,13 +539,63 @@ fn run_with_config(config: PageRankRunConfig) -> Result<(), String> {
 }
 
 fn validate_config(config: &PageRankRunConfig) {
+    assert!(config.num_vertices > 0, "PageRank 图不能为空");
     assert!(config.iterations > 0, "PageRank 迭代次数必须大于 0");
-    assert!(config.alpha_den > 0, "alpha 的分母必须大于 0");
-    assert!(
-        config.alpha_num < config.alpha_den,
-        "当前实现要求 0 < alpha < 1"
+    assert_eq!(
+        config.initial_rank.len(),
+        config.num_vertices,
+        "初始 rank 长度必须等于顶点数"
     );
-    validate_adjacency(&config.adjacency);
+    assert_eq!(
+        config.initial_rank_approx.len(),
+        config.num_vertices,
+        "初始 rank 近似长度必须等于顶点数"
+    );
+
+    let initial_sum = config.initial_rank_approx.iter().sum::<f64>();
+    assert!(
+        (initial_sum - 1.0).abs() <= PROBABILITY_EPSILON,
+        "初始 rank 近似和必须为 1，当前为 {initial_sum:.6}"
+    );
+    assert!(
+        config
+            .initial_rank_approx
+            .iter()
+            .all(|&value| value >= -PROBABILITY_EPSILON),
+        "初始 rank 近似值必须非负"
+    );
+
+    let mut seen_edges = BTreeSet::new();
+    let mut row_weight_sums_approx = vec![0.0; config.num_vertices];
+    for edge in &config.edge_weights {
+        assert!(
+            edge.source < config.num_vertices && edge.target < config.num_vertices,
+            "边 ({}, {}) 超出顶点范围 [0, {})",
+            edge.source,
+            edge.target,
+            config.num_vertices
+        );
+        assert!(
+            seen_edges.insert((edge.source, edge.target)),
+            "重复的稀疏边 ({}, {})",
+            edge.source,
+            edge.target
+        );
+        assert!(
+            edge.weight_approx >= -PROBABILITY_EPSILON,
+            "边权近似值必须非负"
+        );
+        row_weight_sums_approx[edge.source] += edge.weight_approx;
+    }
+
+    for (source, row_sum) in row_weight_sums_approx.iter().enumerate() {
+        assert!(
+            *row_sum <= 1.0 + PROBABILITY_EPSILON,
+            "源点 v{} 的稀疏边权和必须不超过 1，当前为 {:.6}",
+            source,
+            row_sum
+        );
+    }
 }
 
 fn validate_adjacency(adjacency: &[Vec<u8>]) {
@@ -542,57 +616,49 @@ fn validate_adjacency(adjacency: &[Vec<u8>]) {
 }
 
 fn compile_page_rank(config: &PageRankRunConfig) -> CompiledPageRank {
-    let num_vertices = config.adjacency.len();
-    let alpha = fr_fraction(config.alpha_num, config.alpha_den);
-    let one_minus_alpha = Fr::one() - alpha;
-    let alpha_approx = config.alpha_num as f64 / config.alpha_den as f64;
-    let teleport = vec![fr_fraction(1, num_vertices as u64); num_vertices];
-    let teleport_approx = vec![1.0 / num_vertices as f64; num_vertices];
-    let out_degrees = config
-        .adjacency
-        .iter()
-        .map(|row| row.iter().map(|&value| usize::from(value)).sum())
-        .collect::<Vec<_>>();
-    let dangling_vertices = out_degrees
-        .iter()
-        .enumerate()
-        .filter_map(|(vertex, &degree)| (degree == 0).then_some(vertex))
-        .collect::<Vec<_>>();
+    let mut support = vec![vec![0u8; config.num_vertices]; config.num_vertices];
+    let mut outgoing_edge_indices = vec![Vec::new(); config.num_vertices];
+    let mut incoming_edge_indices = vec![Vec::new(); config.num_vertices];
+    let mut row_weight_sums = vec![Fr::zero(); config.num_vertices];
+    let mut row_weight_sums_approx = vec![0.0; config.num_vertices];
 
-    let mut source_weights = vec![None; num_vertices];
-    let mut source_weights_approx = vec![None; num_vertices];
-    for source in 0..num_vertices {
-        let degree = out_degrees[source];
-        if degree == 0 {
-            continue;
-        }
-        source_weights[source] = Some(alpha * fr_inverse_u64(degree as u64));
-        source_weights_approx[source] = Some(alpha_approx / degree as f64);
+    for (edge_idx, edge) in config.edge_weights.iter().enumerate() {
+        support[edge.source][edge.target] = 1;
+        outgoing_edge_indices[edge.source].push(edge_idx);
+        incoming_edge_indices[edge.target].push(edge_idx);
+        row_weight_sums[edge.source] += edge.weight;
+        row_weight_sums_approx[edge.source] += edge.weight_approx;
     }
 
-    let mut incoming_sources = vec![Vec::new(); num_vertices];
-    for source in 0..num_vertices {
-        for target in 0..num_vertices {
-            if config.adjacency[source][target] == 1 {
-                incoming_sources[target].push(source);
-            }
-        }
-    }
+    let residual_mass = row_weight_sums
+        .iter()
+        .map(|row_sum| Fr::one() - *row_sum)
+        .collect::<Vec<_>>();
+    let residual_mass_approx = row_weight_sums_approx
+        .iter()
+        .map(|row_sum| 1.0 - row_sum)
+        .collect::<Vec<_>>();
+    let out_degrees = outgoing_edge_indices
+        .iter()
+        .map(|edges| edges.len())
+        .collect::<Vec<_>>();
+    let teleport = vec![fr_fraction(1, config.num_vertices as u64); config.num_vertices];
+    let teleport_approx = vec![1.0 / config.num_vertices as f64; config.num_vertices];
 
     CompiledPageRank {
-        num_vertices,
+        num_vertices: config.num_vertices,
         iterations: config.iterations,
-        adjacency: config.adjacency.clone(),
-        alpha,
-        one_minus_alpha,
-        alpha_approx,
+        support,
+        edge_weights: config.edge_weights.clone(),
         teleport,
         teleport_approx,
         out_degrees,
-        dangling_vertices,
-        source_weights,
-        source_weights_approx,
-        incoming_sources,
+        outgoing_edge_indices,
+        incoming_edge_indices,
+        row_weight_sums,
+        row_weight_sums_approx,
+        residual_mass,
+        residual_mass_approx,
     }
 }
 
@@ -600,6 +666,64 @@ fn build_uniform_rank_vector(num_vertices: usize) -> (Vec<Fr>, Vec<f64>) {
     let rank = fr_fraction(1, num_vertices as u64);
     let rank_approx = 1.0 / num_vertices as f64;
     (vec![rank; num_vertices], vec![rank_approx; num_vertices])
+}
+
+fn build_sample_rank_vector(num_vertices: usize, seed: u64) -> (Vec<Fr>, Vec<f64>) {
+    assert!(num_vertices > 0, "PageRank 图不能为空");
+
+    let mut rng = StdRng::seed_from_u64(seed);
+    let raw_weights = (0..num_vertices)
+        .map(|_| rng.gen_range(1u64..=10u64))
+        .collect::<Vec<_>>();
+    let total = raw_weights.iter().sum::<u64>();
+    let total_inv = fr_inverse_u64(total);
+
+    let initial_rank = raw_weights
+        .iter()
+        .map(|&value| Fr::from(value) * total_inv)
+        .collect::<Vec<_>>();
+    let initial_rank_approx = raw_weights
+        .iter()
+        .map(|&value| value as f64 / total as f64)
+        .collect::<Vec<_>>();
+
+    (initial_rank, initial_rank_approx)
+}
+
+fn build_private_edge_weights_from_adjacency(
+    adjacency: &[Vec<u8>],
+    alpha_num: u64,
+    alpha_den: u64,
+) -> Vec<SparseEdgeInput> {
+    let alpha = fr_fraction(alpha_num, alpha_den);
+    let alpha_approx = alpha_num as f64 / alpha_den as f64;
+    let num_vertices = adjacency.len();
+    let mut edge_weights = Vec::new();
+
+    for source in 0..num_vertices {
+        let out_degree = adjacency[source]
+            .iter()
+            .map(|&value| usize::from(value))
+            .sum::<usize>();
+        if out_degree == 0 {
+            continue;
+        }
+
+        let weight = alpha * fr_inverse_u64(out_degree as u64);
+        let weight_approx = alpha_approx / out_degree as f64;
+        for target in 0..num_vertices {
+            if adjacency[source][target] == 1 {
+                edge_weights.push(SparseEdgeInput {
+                    source,
+                    target,
+                    weight,
+                    weight_approx,
+                });
+            }
+        }
+    }
+
+    edge_weights
 }
 
 fn sample_sparse_directed_graph(
@@ -631,21 +755,30 @@ fn sample_sparse_directed_graph(
     adjacency
 }
 
-fn build_initial_rank_inputs(indices: &[usize], values: &[Fr]) -> Vec<(usize, Fr)> {
-    let mut inputs = Vec::with_capacity(indices.len() + 1);
-    inputs.push((ZERO_PUBLIC_INPUT_INDEX, Fr::zero()));
+fn build_private_input_assignment(
+    edge_weight_input_indices: &[usize],
+    edge_weights: &[SparseEdgeInput],
+    initial_rank_input_indices: &[usize],
+    initial_rank: &[Fr],
+) -> Vec<(usize, Fr)> {
+    let mut inputs = Vec::with_capacity(edge_weights.len() + initial_rank.len());
     inputs.extend(
-        indices
+        edge_weight_input_indices
             .iter()
-            .zip(values.iter())
+            .zip(edge_weights.iter())
+            .map(|(&index, edge)| (index, edge.weight)),
+    );
+    inputs.extend(
+        initial_rank_input_indices
+            .iter()
+            .zip(initial_rank.iter())
             .map(|(&index, &value)| (index, value)),
     );
     inputs
 }
 
 fn page_rank_export_input_config(num_inputs: usize) -> ExportInputConfig {
-    ExportInputConfig::from_public_values(num_inputs, vec![(ZERO_PUBLIC_INPUT_INDEX, Fr::zero())])
-        .expect("page rank fixed zero public input should be valid")
+    ExportInputConfig::all_private(num_inputs)
 }
 
 fn witness_sum_lincomb(witnesses: &[usize]) -> LinComb {
@@ -661,27 +794,19 @@ fn simulate_sparse_field(compiled: &CompiledPageRank, initial_rank: &[Fr]) -> Ve
     let mut current = initial_rank.to_vec();
 
     for _ in 0..compiled.iterations {
-        let total_mass = current
+        let residual_total = compiled
+            .residual_mass
             .iter()
-            .copied()
+            .enumerate()
+            .map(|(source, residual)| *residual * current[source])
             .fold(Fr::zero(), |acc, value| acc + value);
-        let dangling_mass = compiled
-            .dangling_vertices
-            .iter()
-            .copied()
-            .map(|vertex| current[vertex])
-            .fold(Fr::zero(), |acc, value| acc + value);
-        let teleport_scalar =
-            compiled.one_minus_alpha * total_mass + compiled.alpha * dangling_mass;
 
         let mut next = vec![Fr::zero(); compiled.num_vertices];
+        for edge in &compiled.edge_weights {
+            next[edge.target] += edge.weight * current[edge.source];
+        }
         for target in 0..compiled.num_vertices {
-            for &source in &compiled.incoming_sources[target] {
-                let weight =
-                    compiled.source_weights[source].expect("非 dangling 顶点必须具有稀疏传播权重");
-                next[target] += weight * current[source];
-            }
-            next[target] += compiled.teleport[target] * teleport_scalar;
+            next[target] += compiled.teleport[target] * residual_total;
         }
         current = next;
     }
@@ -693,24 +818,19 @@ fn simulate_sparse_f64(compiled: &CompiledPageRank, initial_rank: &[f64]) -> Vec
     let mut current = initial_rank.to_vec();
 
     for _ in 0..compiled.iterations {
-        let total_mass = current.iter().sum::<f64>();
-        let dangling_mass = compiled
-            .dangling_vertices
+        let residual_total = compiled
+            .residual_mass_approx
             .iter()
-            .copied()
-            .map(|vertex| current[vertex])
+            .enumerate()
+            .map(|(source, residual)| residual * current[source])
             .sum::<f64>();
-        let teleport_scalar =
-            (1.0 - compiled.alpha_approx) * total_mass + compiled.alpha_approx * dangling_mass;
 
         let mut next = vec![0.0; compiled.num_vertices];
+        for edge in &compiled.edge_weights {
+            next[edge.target] += edge.weight_approx * current[edge.source];
+        }
         for target in 0..compiled.num_vertices {
-            for &source in &compiled.incoming_sources[target] {
-                let weight = compiled.source_weights_approx[source]
-                    .expect("非 dangling 顶点必须具有稀疏传播权重");
-                next[target] += weight * current[source];
-            }
-            next[target] += compiled.teleport_approx[target] * teleport_scalar;
+            next[target] += compiled.teleport_approx[target] * residual_total;
         }
         current = next;
     }
@@ -718,56 +838,42 @@ fn simulate_sparse_f64(compiled: &CompiledPageRank, initial_rank: &[f64]) -> Vec
     current
 }
 
-fn build_google_matrix_approx(
-    adjacency: &[Vec<u8>],
-    alpha: f64,
-    teleport: &[f64],
-    out_degrees: &[usize],
-) -> Vec<Vec<f64>> {
-    let num_vertices = adjacency.len();
-    let mut google = vec![vec![0.0; num_vertices]; num_vertices];
+fn build_transition_matrix_approx(compiled: &CompiledPageRank) -> Vec<Vec<f64>> {
+    let mut transition = vec![vec![0.0; compiled.num_vertices]; compiled.num_vertices];
 
-    for source in 0..num_vertices {
-        if out_degrees[source] == 0 {
-            google[source] = teleport.to_vec();
-            continue;
-        }
-
-        let inv_degree = 1.0 / out_degrees[source] as f64;
-        for target in 0..num_vertices {
-            google[source][target] = (1.0 - alpha) * teleport[target]
-                + alpha * f64::from(adjacency[source][target]) * inv_degree;
+    for source in 0..compiled.num_vertices {
+        for target in 0..compiled.num_vertices {
+            transition[source][target] +=
+                compiled.teleport_approx[target] * compiled.residual_mass_approx[source];
         }
     }
+    for edge in &compiled.edge_weights {
+        transition[edge.source][edge.target] += edge.weight_approx;
+    }
 
-    google
+    transition
 }
 
 #[cfg(test)]
-fn build_google_matrix_field(compiled: &CompiledPageRank) -> Vec<Vec<Fr>> {
-    let mut google = vec![vec![Fr::zero(); compiled.num_vertices]; compiled.num_vertices];
+fn build_transition_matrix_field(compiled: &CompiledPageRank) -> Vec<Vec<Fr>> {
+    let mut transition = vec![vec![Fr::zero(); compiled.num_vertices]; compiled.num_vertices];
 
     for source in 0..compiled.num_vertices {
-        if compiled.out_degrees[source] == 0 {
-            google[source] = compiled.teleport.clone();
-            continue;
-        }
-
-        let inv_degree = fr_inverse_u64(compiled.out_degrees[source] as u64);
         for target in 0..compiled.num_vertices {
-            google[source][target] = compiled.one_minus_alpha * compiled.teleport[target]
-                + compiled.alpha
-                    * Fr::from(u64::from(compiled.adjacency[source][target]))
-                    * inv_degree;
+            transition[source][target] +=
+                compiled.teleport[target] * compiled.residual_mass[source];
         }
     }
+    for edge in &compiled.edge_weights {
+        transition[edge.source][edge.target] += edge.weight;
+    }
 
-    google
+    transition
 }
 
 #[cfg(test)]
 fn simulate_dense_field(
-    google_matrix: &[Vec<Fr>],
+    transition_matrix: &[Vec<Fr>],
     initial_rank: &[Fr],
     iterations: usize,
 ) -> Vec<Fr> {
@@ -778,7 +884,7 @@ fn simulate_dense_field(
         let mut next = vec![Fr::zero(); num_vertices];
         for target in 0..num_vertices {
             for source in 0..num_vertices {
-                next[target] += google_matrix[source][target] * current[source];
+                next[target] += transition_matrix[source][target] * current[source];
             }
         }
         current = next;
@@ -795,37 +901,82 @@ fn read_output_vector(output_witnesses: &[usize], assignment: &Assignment) -> Ve
 }
 
 fn print_adjacency_matrix(adjacency: &[Vec<u8>]) {
-    for row in adjacency {
-        let formatted = row
+    for row in adjacency.iter().take(PREVIEW_MAX_MATRIX_ROWS) {
+        let shown = row.len().min(crate::utils::PREVIEW_MAX_MATRIX_COLS);
+        let mut formatted = row
             .iter()
+            .take(shown)
             .map(|value| format!("{:>2}", value))
-            .collect::<Vec<_>>()
-            .join(", ");
-        println!("      [{}]", formatted);
+            .collect::<Vec<_>>();
+        if row.len() > crate::utils::PREVIEW_MAX_MATRIX_COLS {
+            formatted.push(format!(
+                "... (+{} cols)",
+                row.len() - crate::utils::PREVIEW_MAX_MATRIX_COLS
+            ));
+        }
+        println!("      [{}]", formatted.join(", "));
+    }
+
+    if adjacency.len() > PREVIEW_MAX_MATRIX_ROWS {
+        println!(
+            "      ... (+{} rows)",
+            adjacency.len() - PREVIEW_MAX_MATRIX_ROWS
+        );
     }
 }
 
-fn print_source_weights(out_degrees: &[usize], source_weights_approx: &[Option<f64>]) {
-    for (source, (degree, weight)) in out_degrees
+fn print_private_edge_weights(
+    edge_weights: &[SparseEdgeInput],
+    outgoing_edge_indices: &[Vec<usize>],
+) {
+    for (source, edge_indices) in outgoing_edge_indices
         .iter()
-        .zip(source_weights_approx.iter())
+        .take(PREVIEW_MAX_MATRIX_ROWS)
         .enumerate()
     {
-        match weight {
-            Some(weight) => println!(
-                "    v{}: out-degree={}, alpha/d_i≈{:.6}",
-                source, degree, weight
-            ),
-            None => println!("    v{}: out-degree=0, dangling", source),
+        if edge_indices.is_empty() {
+            println!("    v{}: none", source);
+            continue;
         }
+
+        let formatted = format_preview_list(edge_indices, PREVIEW_MAX_VECTOR_ITEMS, |edge_idx| {
+            let edge = &edge_weights[*edge_idx];
+            format!("v{}: {:.6}", edge.target, edge.weight_approx)
+        });
+        println!("    v{} -> {}", source, formatted);
+    }
+
+    if outgoing_edge_indices.len() > PREVIEW_MAX_MATRIX_ROWS {
+        println!(
+            "    ... (+{} source rows)",
+            outgoing_edge_indices.len() - PREVIEW_MAX_MATRIX_ROWS
+        );
+    }
+}
+
+fn print_row_mass_summary(row_weight_sums_approx: &[f64], residual_mass_approx: &[f64]) {
+    for (source, (&row_sum, &residual)) in row_weight_sums_approx
+        .iter()
+        .zip(residual_mass_approx.iter())
+        .take(PREVIEW_MAX_MATRIX_ROWS)
+        .enumerate()
+    {
+        println!(
+            "    v{}: row-sum≈{:.6}, residual≈{:.6}",
+            source, row_sum, residual
+        );
+    }
+
+    if row_weight_sums_approx.len() > PREVIEW_MAX_MATRIX_ROWS {
+        println!(
+            "    ... (+{} rows)",
+            row_weight_sums_approx.len() - PREVIEW_MAX_MATRIX_ROWS
+        );
     }
 }
 
 fn print_approx_matrix(name: &str, matrix: &[Vec<f64>]) {
-    println!("    {} =", name);
-    for row in matrix {
-        println!("      {}", format_approx_vector(row));
-    }
+    print_preview_matrix(name, matrix, |value| format!("{:>8.6}", value));
 }
 
 fn average_out_degree(out_degrees: &[usize]) -> f64 {
@@ -833,24 +984,9 @@ fn average_out_degree(out_degrees: &[usize]) -> f64 {
 }
 
 fn format_approx_vector(values: &[f64]) -> String {
-    let formatted = values
-        .iter()
-        .map(|value| format!("{:>8.6}", value))
-        .collect::<Vec<_>>()
-        .join(", ");
-    format!("[{}]", formatted)
-}
-
-fn format_vertex_list(vertices: &[usize]) -> String {
-    if vertices.is_empty() {
-        return "none".to_string();
-    }
-
-    vertices
-        .iter()
-        .map(|vertex| format!("v{}", vertex))
-        .collect::<Vec<_>>()
-        .join(", ")
+    format_preview_list(values, PREVIEW_MAX_VECTOR_ITEMS, |value| {
+        format!("{:>8.6}", value)
+    })
 }
 
 fn parse_positive_usize_arg(name: &str, raw: &str) -> Result<usize, String> {
@@ -880,17 +1016,19 @@ fn usage_text() -> &'static str {
   cargo run -- page_rank <num_vertices> <iterations>
 
 说明:
-  默认参数: num_vertices=16, iterations=5, alpha=17/20, teleport=uniform。
-  邻接矩阵按稀疏有向 G(n, p) 采样，禁止自环，p=min(8/(n-1), 1)，seed=42。
-  电路按稀疏传播项、dangling mass 和 teleportation 分开编译，不显式展开稠密 Google 矩阵。"
+  默认参数: num_vertices=16, iterations=5。
+  公开部分只保留 x0=1 与稀疏支撑模式；私有输入包含稀疏边权和初始 rank。
+  demo 私有边权由 alpha=17/20 与采样邻接矩阵生成，行剩余质量通过 uniform teleport 分发。
+  默认稀疏支撑按有向 G(n, p) 采样，禁止自环，p=min(8/(n-1), 1)。"
 }
 
 #[cfg(test)]
 mod circuit_tests {
     use super::*;
+    use crate::r1cs::RmsLinearExport;
 
     #[test]
-    fn sparse_page_rank_matches_dense_google_matrix_semantics() {
+    fn sparse_private_weights_match_dense_transition_semantics() {
         let config = PageRankRunConfig::from_adjacency(
             vec![
                 vec![0, 1, 1, 0],
@@ -901,25 +1039,17 @@ mod circuit_tests {
             3,
         );
         let compiled = compile_page_rank(&config);
-        let (initial_rank, _) = build_uniform_rank_vector(compiled.num_vertices);
-        let dense_google = build_google_matrix_field(&compiled);
-        let sparse_output = simulate_sparse_field(&compiled, &initial_rank);
-        let dense_output = simulate_dense_field(&dense_google, &initial_rank, compiled.iterations);
+        let dense_transition = build_transition_matrix_field(&compiled);
+        let sparse_output = simulate_sparse_field(&compiled, &config.initial_rank);
+        let dense_output =
+            simulate_dense_field(&dense_transition, &config.initial_rank, compiled.iterations);
 
         assert_eq!(sparse_output, dense_output);
     }
 
     #[test]
     fn page_rank_circuit_is_rms_and_preserves_output() {
-        let generated = generate_circuit(PageRankRunConfig::from_adjacency(
-            vec![
-                vec![0, 1, 1, 0],
-                vec![0, 0, 1, 0],
-                vec![1, 0, 0, 0],
-                vec![0, 0, 0, 0],
-            ],
-            3,
-        ));
+        let generated = generate_circuit(PageRankRunConfig::sampled(4, 2, DEFAULT_SEED));
         let transformed = transform_circuit(&generated);
 
         assert!(generated
@@ -970,6 +1100,69 @@ mod circuit_tests {
             &optimized_assignment,
         );
         assert_eq!(optimized_output, generated.expected_output);
+    }
+
+    #[test]
+    fn page_rank_transform_preserves_outputs_for_zero_in_degree_targets() {
+        let generated = generate_circuit(PageRankRunConfig::from_adjacency(
+            vec![
+                vec![0, 1, 1, 0],
+                vec![0, 0, 1, 0],
+                vec![1, 0, 0, 0],
+                vec![0, 0, 0, 0],
+            ],
+            2,
+        ));
+        let transformed = transform_circuit(&generated);
+
+        let mut optimized_assignment =
+            Assignment::from_field_inputs(generated.input_assignment.clone());
+        assert!(execute_circuit(&transformed.optimized, &mut optimized_assignment).is_some());
+        assert!(verify_assignment(
+            &transformed.optimized,
+            &optimized_assignment
+        ));
+
+        let optimized_output = read_output_vector(
+            &generated.circuit.output_witness_indices,
+            &optimized_assignment,
+        );
+        assert_eq!(optimized_output, generated.expected_output);
+    }
+
+    #[test]
+    fn export_marks_edge_weights_and_initial_rank_private() {
+        let generated = generate_circuit(PageRankRunConfig::from_adjacency(
+            vec![
+                vec![0, 1, 1, 0],
+                vec![0, 0, 1, 0],
+                vec![1, 0, 0, 0],
+                vec![0, 0, 0, 0],
+            ],
+            2,
+        ));
+        let export = RmsLinearExport::from_r1cs_with_inputs(
+            &generated.circuit.r1cs,
+            &page_rank_export_input_config(generated.circuit.r1cs.num_inputs),
+        )
+        .expect("导出带输入元数据的 RMS 失败");
+
+        assert_eq!(export.num_public_inputs, 1);
+        assert_eq!(export.public_inputs[0].index, 0);
+        assert_eq!(export.public_inputs[0].value, "1");
+        assert_eq!(
+            export.num_private_inputs,
+            generated.compiled.edge_weights.len() + generated.compiled.num_vertices
+        );
+
+        let expected_private_inputs = generated
+            .circuit
+            .edge_weight_input_indices
+            .iter()
+            .chain(generated.circuit.initial_rank_input_indices.iter())
+            .copied()
+            .collect::<Vec<_>>();
+        assert_eq!(export.private_inputs, expected_private_inputs);
     }
 
     #[test]

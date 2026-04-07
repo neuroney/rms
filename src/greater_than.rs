@@ -25,9 +25,10 @@ pub struct GreaterThanCircuit {
 
 #[derive(Clone, Debug)]
 pub struct GreaterThanRunConfig {
-    pub num_bits: usize,
-    pub alpha: u64,
-    pub beta: u64,
+    /// Operand bits in LSB-first order.
+    pub alpha_bits: Vec<u64>,
+    /// Operand bits in LSB-first order.
+    pub beta_bits: Vec<u64>,
     pub export_stem: String,
 }
 
@@ -36,8 +37,6 @@ pub struct GeneratedGreaterThan {
     pub config: GreaterThanRunConfig,
     pub circuit: GreaterThanCircuit,
     pub input_assignment: Vec<(usize, u64)>,
-    pub alpha_bits: Vec<u64>,
-    pub beta_bits: Vec<u64>,
     pub expected_output: u64,
 }
 
@@ -66,14 +65,17 @@ impl GreaterThanRunConfig {
     }
 
     pub fn for_bits(num_bits: usize) -> Self {
-        let (alpha, beta) = demo_operands(num_bits);
+        let (alpha_bits, beta_bits) = demo_operands(num_bits);
 
         Self {
-            num_bits,
-            alpha,
-            beta,
+            alpha_bits,
+            beta_bits,
             export_stem: format!("data/greater_than_{}bit", num_bits),
         }
+    }
+
+    pub fn num_bits(&self) -> usize {
+        self.alpha_bits.len()
     }
 }
 
@@ -225,23 +227,20 @@ pub fn generate_greater_than_r1cs(num_bits: usize) -> GreaterThanCircuit {
 pub fn generate_circuit(config: GreaterThanRunConfig) -> GeneratedGreaterThan {
     validate_config(&config);
 
-    let circuit = generate_greater_than_r1cs(config.num_bits);
-    let alpha_bits = decompose_bits(config.alpha, config.num_bits);
-    let beta_bits = decompose_bits(config.beta, config.num_bits);
+    let num_bits = config.num_bits();
+    let circuit = generate_greater_than_r1cs(num_bits);
     let input_assignment = build_bit_inputs(
         &circuit.alpha_input_indices,
         &circuit.beta_input_indices,
-        &alpha_bits,
-        &beta_bits,
+        &config.alpha_bits,
+        &config.beta_bits,
     );
-    let expected_output = u64::from(config.alpha > config.beta);
+    let expected_output = u64::from(bits_greater_than(&config.alpha_bits, &config.beta_bits));
 
     GeneratedGreaterThan {
         config,
         circuit,
         input_assignment,
-        alpha_bits,
-        beta_bits,
         expected_output,
     }
 }
@@ -329,17 +328,9 @@ fn run_with_config(config: GreaterThanRunConfig) -> Result<(), String> {
     println!("╚══════════════════════════════════════════════════╝\n");
 
     println!("【1. 生成电路】");
-    println!("  位宽: {}", generated.config.num_bits);
-    println!(
-        "  alpha = {} (bits: {})",
-        generated.config.alpha,
-        format_bits(&generated.alpha_bits)
-    );
-    println!(
-        "  beta  = {} (bits: {})",
-        generated.config.beta,
-        format_bits(&generated.beta_bits)
-    );
+    println!("  位宽: {}", generated.config.num_bits());
+    println!("  alpha = {}", format_operand(&generated.config.alpha_bits));
+    println!("  beta  = {}", format_operand(&generated.config.beta_bits));
     println!("  输入索引（按 MSB -> LSB 展示）:");
     print_bit_indices("alpha", "x", &generated.circuit.alpha_input_indices);
     print_bit_indices("beta ", "x", &generated.circuit.beta_input_indices);
@@ -407,55 +398,65 @@ fn run_with_config(config: GreaterThanRunConfig) -> Result<(), String> {
 }
 
 fn validate_config(config: &GreaterThanRunConfig) {
-    assert!(config.num_bits > 0, "比较位宽必须大于 0");
-    assert!(
-        config.num_bits <= u64::BITS as usize,
-        "当前 demo 仅支持不超过 64 bit 的整数输入"
-    );
-
-    if config.num_bits < u64::BITS as usize {
-        let upper_bound = 1u64 << config.num_bits;
-        assert!(
-            config.alpha < upper_bound,
-            "alpha 超出 {} bit 范围",
-            config.num_bits
-        );
-        assert!(
-            config.beta < upper_bound,
-            "beta 超出 {} bit 范围",
-            config.num_bits
-        );
-    }
-}
-
-fn demo_operands(num_bits: usize) -> (u64, u64) {
+    let num_bits = config.num_bits();
     assert!(num_bits > 0, "比较位宽必须大于 0");
-    assert!(
-        num_bits <= u64::BITS as usize,
-        "当前 demo 仅支持不超过 64 bit 的整数输入"
+    assert_eq!(
+        num_bits,
+        config.beta_bits.len(),
+        "alpha_bits 和 beta_bits 的长度必须一致"
     );
 
-    let max_value = if num_bits == u64::BITS as usize {
-        u64::MAX
-    } else {
-        (1u64 << num_bits) - 1
-    };
-
-    if max_value == 1 {
-        return (1, 0);
-    }
-
-    let alpha = max_value.saturating_sub(max_value / 5).max(1);
-    let mut beta = max_value / 2;
-    if beta >= alpha {
-        beta = alpha.saturating_sub(1);
-    }
-
-    (alpha, beta)
+    validate_binary_operand("alpha_bits", &config.alpha_bits);
+    validate_binary_operand("beta_bits", &config.beta_bits);
 }
 
-fn decompose_bits(value: u64, num_bits: usize) -> Vec<u64> {
-    (0..num_bits).map(|bit| (value >> bit) & 1).collect()
+fn validate_binary_operand(name: &str, bits: &[u64]) {
+    if let Some((bit_idx, value)) = bits.iter().enumerate().find(|(_, bit)| **bit > 1) {
+        panic!("{name}[{bit_idx}] = {value} 不是有效 bit（必须是 0 或 1）");
+    }
+}
+
+fn demo_operands(num_bits: usize) -> (Vec<u64>, Vec<u64>) {
+    assert!(num_bits > 0, "比较位宽必须大于 0");
+
+    if num_bits == 1 {
+        return (vec![1], vec![0]);
+    }
+
+    let deciding_bit = num_bits - 1 - (num_bits / 3).max(1);
+    let mut alpha_bits = vec![0; num_bits];
+    let mut beta_bits = vec![0; num_bits];
+
+    for bit in (deciding_bit + 1)..num_bits {
+        let shared = ((bit + num_bits) % 2) as u64;
+        alpha_bits[bit] = shared;
+        beta_bits[bit] = shared;
+    }
+
+    alpha_bits[deciding_bit] = 1;
+    beta_bits[deciding_bit] = 0;
+
+    for bit in 0..deciding_bit {
+        alpha_bits[bit] = ((bit * 3 + 1) % 2) as u64;
+        beta_bits[bit] = ((bit * 5 + 2) % 2) as u64;
+    }
+
+    (alpha_bits, beta_bits)
+}
+
+fn bits_greater_than(alpha_bits: &[u64], beta_bits: &[u64]) -> bool {
+    assert_eq!(
+        alpha_bits.len(),
+        beta_bits.len(),
+        "alpha_bits 和 beta_bits 的长度必须一致"
+    );
+
+    alpha_bits
+        .iter()
+        .rev()
+        .zip(beta_bits.iter().rev())
+        .find_map(|(alpha, beta)| (alpha != beta).then_some(alpha > beta))
+        .unwrap_or(false)
 }
 
 fn build_bit_inputs(
@@ -464,6 +465,17 @@ fn build_bit_inputs(
     alpha_bits: &[u64],
     beta_bits: &[u64],
 ) -> Vec<(usize, u64)> {
+    assert_eq!(
+        alpha_indices.len(),
+        alpha_bits.len(),
+        "alpha 输入索引数量必须与 alpha_bits 长度一致"
+    );
+    assert_eq!(
+        beta_indices.len(),
+        beta_bits.len(),
+        "beta 输入索引数量必须与 beta_bits 长度一致"
+    );
+
     let mut inputs = Vec::with_capacity(alpha_indices.len() + beta_indices.len() + 1);
     inputs.push((ZERO_PUBLIC_INPUT_INDEX, 0));
 
@@ -487,6 +499,42 @@ fn greater_than_export_input_config(num_inputs: usize) -> ExportInputConfig {
 
 fn read_output(output_witness: usize, assignment: &Assignment) -> u64 {
     fr_to_u64(&assignment.witnesses[&output_witness]).expect("比较输出超出 u64")
+}
+
+fn format_operand(bits: &[u64]) -> String {
+    let binary = format_bits(bits);
+    match bits_to_u64(bits) {
+        Some(value) => format!("{value} (bits: {binary})"),
+        None => format!("{} ({} bits)", abbreviate_binary(&binary), bits.len()),
+    }
+}
+
+fn bits_to_u64(bits: &[u64]) -> Option<u64> {
+    if bits.len() > u64::BITS as usize {
+        return None;
+    }
+
+    let mut value = 0u64;
+    for (bit_idx, bit) in bits.iter().enumerate() {
+        if *bit == 1 {
+            value |= 1u64 << bit_idx;
+        }
+    }
+    Some(value)
+}
+
+fn abbreviate_binary(binary: &str) -> String {
+    const EDGE_BITS: usize = 24;
+
+    if binary.len() <= EDGE_BITS * 2 {
+        return format!("0b{binary}");
+    }
+
+    format!(
+        "0b{}...{}",
+        &binary[..EDGE_BITS],
+        &binary[binary.len() - EDGE_BITS..]
+    )
 }
 
 fn format_bits(bits: &[u64]) -> String {
@@ -539,7 +587,7 @@ fn usage_text() -> &'static str {
 
 说明:
   默认值: bit=8。
-  alpha 和 beta 会根据位宽自动生成一组稳定的演示输入。"
+  alpha 和 beta 会根据位宽自动生成一组稳定的按位演示输入，支持任意位宽。"
 }
 
 #[cfg(test)]
@@ -548,41 +596,33 @@ mod circuit_tests {
 
     fn build_greater_than_assignment(
         circuit: &GreaterThanCircuit,
-        alpha: u64,
-        beta: u64,
+        alpha_bits: &[u64],
+        beta_bits: &[u64],
     ) -> Assignment {
-        assert!(
-            circuit.num_bits <= u64::BITS as usize,
-            "测试输入目前仅支持不超过 64 bit"
-        );
-        if circuit.num_bits < u64::BITS as usize {
-            let upper_bound = 1u64 << circuit.num_bits;
-            assert!(
-                alpha < upper_bound,
-                "alpha 超出 {} bit 范围",
-                circuit.num_bits
-            );
-            assert!(
-                beta < upper_bound,
-                "beta 超出 {} bit 范围",
-                circuit.num_bits
-            );
-        }
+        assert_eq!(circuit.num_bits, alpha_bits.len(), "alpha_bits 长度不匹配");
+        assert_eq!(circuit.num_bits, beta_bits.len(), "beta_bits 长度不匹配");
 
-        let mut inputs = Vec::with_capacity(circuit.num_bits * 2 + 1);
-        inputs.push((ZERO_PUBLIC_INPUT_INDEX, 0));
-        for (bit, input_idx) in circuit.alpha_input_indices.iter().enumerate() {
-            inputs.push((*input_idx, (alpha >> bit) & 1));
-        }
-        for (bit, input_idx) in circuit.beta_input_indices.iter().enumerate() {
-            inputs.push((*input_idx, (beta >> bit) & 1));
-        }
-
-        Assignment::new(inputs)
+        Assignment::new(build_bit_inputs(
+            &circuit.alpha_input_indices,
+            &circuit.beta_input_indices,
+            alpha_bits,
+            beta_bits,
+        ))
     }
 
     fn read_greater_than_output(circuit: &GreaterThanCircuit, assignment: &Assignment) -> u64 {
         fr_to_u64(&assignment.witnesses[&circuit.output_witness_index]).expect("比较输出超出 u64")
+    }
+
+    fn bits_from_msb_string(bits: &str) -> Vec<u64> {
+        bits.chars()
+            .rev()
+            .map(|ch| match ch {
+                '0' => 0,
+                '1' => 1,
+                other => panic!("非法 bit 字符: {other}"),
+            })
+            .collect()
     }
 
     #[test]
@@ -600,17 +640,50 @@ mod circuit_tests {
             .iter()
             .all(|constraint| !constraint.a.terms.is_empty()));
 
-        for (alpha, beta, expected) in [
-            (0u64, 0u64, 0u64),
-            (1, 0, 1),
-            (0, 1, 0),
-            (6, 6, 0),
-            (9, 6, 1),
-            (6, 9, 0),
-            (15, 14, 1),
-            (8, 12, 0),
+        for (alpha_bits, beta_bits, expected) in [
+            (
+                bits_from_msb_string("0000"),
+                bits_from_msb_string("0000"),
+                0u64,
+            ),
+            (
+                bits_from_msb_string("0001"),
+                bits_from_msb_string("0000"),
+                1u64,
+            ),
+            (
+                bits_from_msb_string("0000"),
+                bits_from_msb_string("0001"),
+                0u64,
+            ),
+            (
+                bits_from_msb_string("0110"),
+                bits_from_msb_string("0110"),
+                0u64,
+            ),
+            (
+                bits_from_msb_string("1001"),
+                bits_from_msb_string("0110"),
+                1u64,
+            ),
+            (
+                bits_from_msb_string("0110"),
+                bits_from_msb_string("1001"),
+                0u64,
+            ),
+            (
+                bits_from_msb_string("1111"),
+                bits_from_msb_string("1110"),
+                1u64,
+            ),
+            (
+                bits_from_msb_string("1000"),
+                bits_from_msb_string("1100"),
+                0u64,
+            ),
         ] {
-            let mut original_assignment = build_greater_than_assignment(&circuit, alpha, beta);
+            let mut original_assignment =
+                build_greater_than_assignment(&circuit, &alpha_bits, &beta_bits);
             assert!(execute_circuit(&circuit.r1cs, &mut original_assignment).is_some());
             assert!(verify_assignment(&circuit.r1cs, &original_assignment));
             assert_eq!(
@@ -618,7 +691,8 @@ mod circuit_tests {
                 expected
             );
 
-            let mut optimized_assignment = build_greater_than_assignment(&circuit, alpha, beta);
+            let mut optimized_assignment =
+                build_greater_than_assignment(&circuit, &alpha_bits, &beta_bits);
             assert!(execute_circuit(&optimized, &mut optimized_assignment).is_some());
             assert!(verify_assignment(&optimized, &optimized_assignment));
             assert_eq!(
@@ -642,6 +716,21 @@ mod pipeline_tests {
         assert!(evaluation.original_valid);
         assert!(evaluation.transformed_valid);
         assert!(evaluation.outputs_match);
+        assert_eq!(evaluation.original_output, evaluation.expected_output);
+        assert_eq!(evaluation.transformed_output, evaluation.expected_output);
+    }
+
+    #[test]
+    fn greater_than_130_bit_pipeline_keeps_output_after_transform() {
+        let generated = generate_circuit(GreaterThanRunConfig::for_bits(130));
+        let transformed = transform_circuit(&generated);
+        let evaluation = evaluate_equivalence(&generated, &transformed);
+
+        assert_eq!(generated.config.num_bits(), 130);
+        assert!(evaluation.original_valid);
+        assert!(evaluation.transformed_valid);
+        assert!(evaluation.outputs_match);
+        assert_eq!(evaluation.expected_output, 1);
         assert_eq!(evaluation.original_output, evaluation.expected_output);
         assert_eq!(evaluation.transformed_output, evaluation.expected_output);
     }

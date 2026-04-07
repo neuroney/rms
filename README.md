@@ -13,8 +13,11 @@ src/
   cli.rs            # command-line dispatch
   circom.rs         # public Circom import + transform workflow
   circom_reader.rs  # Circom parsing/import internals
-  matrix_mul.rs     # matrix multiplication demo + API
+  db_select.rs      # public/private DB selection demos + API
+  fix_mat.rs        # fixed public matrix times private vector demo + API
+  two_mat.rs        # two private matrices multiplication demo + API
   greater_than.rs   # greater-than demo + API
+  mimc7.rs          # hand-written MiMC7 RMS demo + API
   page_rank.rs      # sparse PageRank demo + API
   random_mul.rs     # random RMS multiplication-chain demo + API
   random_linear.rs  # random RMS linear-chain demo + API
@@ -33,8 +36,11 @@ docs/               # repository structure notes
 Public API is organized under:
 
 - `rmsgen::circom`
-- `rmsgen::matrix_mul`
+- `rmsgen::db_select`
+- `rmsgen::fix_mat`
+- `rmsgen::two_mat`
 - `rmsgen::greater_than`
+- `rmsgen::mimc7`
 - `rmsgen::page_rank`
 - `rmsgen::random_mul`
 - `rmsgen::random_linear`
@@ -47,11 +53,15 @@ Public API is organized under:
 
 ## Commands
 
-The repository centers on these 7 CLI commands:
+The repository centers on these 11 CLI commands:
 
 - `circom`: read a Circom constraints JSON, binary `.r1cs`, or `.circom` source and convert it to RMS
+- `fixmat`: fixed public matrix times private vector, exported as RMS
 - `greater_than`: hand-written greater-than circuit exported as RMS
-- `matrix_mul`: hand-written matrix multiplication circuit exported as RMS
+- `mimc7`: hand-written recursive MiMC7 circuit with `x <- (x + k_i)^7`
+- `pubdb`: private selection over a public database
+- `privdb`: private selection over a private database
+- `twomat`: two private matrices multiplication circuit exported as RMS
 - `page_rank`: hand-written fixed-iteration PageRank circuit exported as RMS
 - `random_mul`: directly sampled RMS multiplication chain
 - `random_linear`: directly sampled RMS linear circuit
@@ -61,9 +71,12 @@ The repository centers on these 7 CLI commands:
 
 ```bash
 cargo run
-cargo run -- matrix_mul 6
-cargo run -- matrix_mul 4 8 6
+cargo run -- fixmat 6
+cargo run -- twomat 6
+cargo run -- pubdb 3
+cargo run -- privdb 3
 cargo run -- greater_than 16
+cargo run -- mimc7 91
 cargo run -- page_rank 8
 cargo run -- page_rank 32 8
 cargo run -- random_mul 8 128
@@ -72,12 +85,16 @@ cargo run -- dense_poly 6 3
 cargo run -- circom fixtures/circomlib_and_o0.json
 ```
 
-`cargo run` defaults to the matrix multiplication command.
+`cargo run` defaults to the `twomat` command.
 
 Parameter summary:
 
-- `matrix_mul`: `dim` or `rows shared cols`
-- `greater_than`: `bit`
+- `fixmat`: `dim`
+- `twomat`: `dim`
+- `pubdb`: `x`（0-based 地址，DB 为 public input，设置 `n = 2^x`）
+- `privdb`: `x`（0-based 地址，DB 为 private input，设置 `n = 2^x`）
+- `greater_than`: `bit`（按位生成演示输入，支持任意位宽）
+- `mimc7`: `num_rounds`（使用 fixture 内置的固定 round constants，按 `x <- (x + k_i)^7` 递推，最大 91）
 - `page_rank`: `iterations` or `num_vertices iterations`
 - `random_mul`: `num_inputs num_constraints`
 - `random_linear`: `num_inputs num_constraints`
@@ -104,13 +121,17 @@ cargo test -- --nocapture
 - Hand-written demos reserve `x0 = 1` as a public constant; demos that need an explicit zero
   constant may also reserve a fixed public `0` input and mark the remaining external inputs as
   private.
+- `fixmat` fixes a public `n x n` matrix in the circuit at setup time and keeps only the private
+  input vector as external inputs.
+- `twomat` keeps both `n x n` operands private.
 - Circom exports preserve declared public/private inputs when the corresponding public values are
   available from the reference witness flow.
-- `page_rank` keeps the Google matrix sparse in the circuit by compiling
-  edge propagation, dangling-mass handling, and teleportation as separate RMS steps.
-- `page_rank` samples a sparse directed graph for the adjacency matrix by default:
+- `page_rank` keeps the circuit sparse by exposing per-edge propagation weights and the initial
+  rank vector as private inputs, while compiling only a public sparse support pattern plus uniform
+  teleportation constants into RMS.
+- `page_rank` samples a sparse directed graph for the public support pattern by default:
   no self-loops and `p = min(8 / (n - 1), 1)`, which keeps expected out-degree roughly constant as
-  `n` grows.
+  `n` grows; demo private edge weights are then derived from `alpha = 17 / 20`.
 - Circom fixture batch runs are orchestrated by `scripts/run_fixture_circom_batch.sh`.
 - R1CS inspection helpers live in `scripts/analyze_r1cs.py` and `scripts/compare_circuits.py`.
 - Node dependencies in `package.json` are only needed for Circom/snarkjs-based fixture workflows.
