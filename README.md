@@ -119,7 +119,7 @@ cargo test -- --nocapture
 
 - CLI export artifacts are written under `data/`.
 - Hand-written demos reserve `x0 = 1` as a public constant; demos that need an explicit zero
-  constant may also reserve a fixed public `0` input and mark the remaining external inputs as
+  constant reserve `x1 = 0` as an extra public input and mark the remaining external inputs as
   private.
 - `fixmat` fixes a public `n x n` matrix in the circuit at setup time and keeps only the private
   input vector as external inputs.

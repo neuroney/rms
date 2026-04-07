@@ -13,7 +13,8 @@ use ark_ff::One;
 
 pub const DEFAULT_INDEX_BITS: usize = 3;
 pub const DEFAULT_NUM_RECORDS: usize = 1usize << DEFAULT_INDEX_BITS;
-pub const FIRST_INDEX_BIT_INPUT_INDEX: usize = 1;
+pub const ZERO_PUBLIC_INPUT_INDEX: usize = 1;
+pub const FIRST_INDEX_BIT_INPUT_INDEX: usize = ZERO_PUBLIC_INPUT_INDEX + 1;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DatabaseVisibility {
@@ -138,10 +139,7 @@ pub fn generate_db_select_r1cs(num_records: usize) -> Result<DbSelectCircuit, St
     next_witness += 1;
     r1cs.add_constraint(
         Constraint {
-            a: LinComb::from_terms(vec![
-                (Fr::one(), Variable::Input(0)),
-                (-Fr::one(), Variable::Input(0)),
-            ]),
+            a: LinComb::from_var(Variable::Input(ZERO_PUBLIC_INPUT_INDEX)),
             b: LinComb::from_var(Variable::Witness(1)),
             c: LinComb::from_var(Variable::Witness(zero_witness_index)),
         },
@@ -488,19 +486,25 @@ fn export_input_config(
     generated: &GeneratedDbSelect,
 ) -> Result<ExportInputConfig, Box<dyn std::error::Error>> {
     match generated.config.visibility {
-        DatabaseVisibility::Public => Ok(ExportInputConfig::from_public_values(
+        DatabaseVisibility::Public => {
+            let mut public_inputs = vec![(ZERO_PUBLIC_INPUT_INDEX, Fr::from(0u64))];
+            public_inputs.extend(
+                generated
+                    .circuit
+                    .database_input_indices
+                    .iter()
+                    .zip(generated.config.database_values.iter())
+                    .map(|(&input_idx, &value)| (input_idx, value)),
+            );
+            Ok(ExportInputConfig::from_public_values(
+                generated.circuit.r1cs.num_inputs,
+                public_inputs,
+            )?)
+        }
+        DatabaseVisibility::Private => Ok(ExportInputConfig::from_public_values(
             generated.circuit.r1cs.num_inputs,
-            generated
-                .circuit
-                .database_input_indices
-                .iter()
-                .zip(generated.config.database_values.iter())
-                .map(|(&input_idx, &value)| (input_idx, value))
-                .collect(),
+            vec![(ZERO_PUBLIC_INPUT_INDEX, Fr::from(0u64))],
         )?),
-        DatabaseVisibility::Private => Ok(ExportInputConfig::all_private(
-            generated.circuit.r1cs.num_inputs,
-        )),
     }
 }
 
@@ -511,7 +515,8 @@ fn build_input_assignment(
     database_values: &[Fr],
 ) -> Vec<(usize, Fr)> {
     let mut assignment =
-        Vec::with_capacity(index_bit_input_indices.len() + database_input_indices.len());
+        Vec::with_capacity(1 + index_bit_input_indices.len() + database_input_indices.len());
+    assignment.push((ZERO_PUBLIC_INPUT_INDEX, Fr::from(0u64)));
 
     for (&input_idx, &bit) in index_bit_input_indices.iter().zip(index_bits.iter()) {
         assignment.push((input_idx, Fr::from(bit)));
@@ -683,7 +688,7 @@ mod tests {
         let circuit = generate_db_select_r1cs(8).expect("db select circuit");
 
         assert_eq!(circuit.num_index_bits, 3);
-        assert_eq!(circuit.r1cs.num_inputs, 12);
+        assert_eq!(circuit.r1cs.num_inputs, 13);
         assert_eq!(circuit.zero_witness_index, 2);
         assert_eq!(circuit.selector_witness_indices.len(), 8);
         assert_eq!(circuit.contribution_witness_indices.len(), 8);
@@ -749,9 +754,9 @@ mod tests {
         )
         .expect("export");
 
-        assert_eq!(export.num_public_inputs, 9);
+        assert_eq!(export.num_public_inputs, 10);
         assert_eq!(export.num_private_inputs, 3);
-        assert_eq!(export.private_inputs, vec![1, 2, 3]);
+        assert_eq!(export.private_inputs, vec![2, 3, 4]);
     }
 
     #[test]
@@ -768,8 +773,8 @@ mod tests {
         )
         .expect("export");
 
-        assert_eq!(export.num_public_inputs, 1);
+        assert_eq!(export.num_public_inputs, 2);
         assert_eq!(export.num_private_inputs, 11);
-        assert_eq!(export.private_inputs, (1..12).collect::<Vec<_>>());
+        assert_eq!(export.private_inputs, (2..13).collect::<Vec<_>>());
     }
 }

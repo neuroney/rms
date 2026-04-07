@@ -10,7 +10,9 @@ use crate::utils::{
     PREVIEW_MAX_VECTOR_ITEMS,
 };
 use ark_bn254::Fr;
-use ark_ff::One;
+
+const ZERO_PUBLIC_INPUT_INDEX: usize = 1;
+const FIRST_VECTOR_INPUT_INDEX: usize = ZERO_PUBLIC_INPUT_INDEX + 1;
 
 #[derive(Clone, Debug)]
 pub struct FixMatCircuit {
@@ -79,20 +81,18 @@ pub fn generate_fix_mat_r1cs(matrix_values: &[Vec<u64>]) -> FixMatCircuit {
     assert!(dim > 0, "矩阵维度必须大于 0");
     validate_matrix_shape(matrix_values, dim, dim, "固定矩阵 M");
 
-    let num_inputs = 1 + dim;
+    let num_inputs = FIRST_VECTOR_INPUT_INDEX + dim;
     let mut r1cs = R1CS::new(num_inputs, 0);
 
-    let vector_input_indices = (1..=dim).collect::<Vec<_>>();
+    let vector_input_indices =
+        (FIRST_VECTOR_INPUT_INDEX..FIRST_VECTOR_INPUT_INDEX + dim).collect::<Vec<_>>();
 
     let mut next_witness = 2usize;
     let zero_witness = next_witness;
     next_witness += 1;
     r1cs.add_constraint(
         Constraint {
-            a: LinComb::from_terms(vec![
-                (Fr::one(), Variable::Input(0)),
-                (-Fr::one(), Variable::Input(0)),
-            ]),
+            a: LinComb::from_var(Variable::Input(ZERO_PUBLIC_INPUT_INDEX)),
             b: LinComb::from_var(Variable::Witness(1)),
             c: LinComb::from_var(Variable::Witness(zero_witness)),
         },
@@ -221,7 +221,7 @@ pub fn export_circuit(
     export_r1cs_bundle_with_inputs(
         &transformed.optimized,
         &generated.config.export_stem,
-        &ExportInputConfig::all_private(generated.circuit.r1cs.num_inputs),
+        &fix_mat_export_input_config(generated.circuit.r1cs.num_inputs),
     )
 }
 
@@ -355,11 +355,15 @@ fn print_value_matrix(name: &str, matrix: &[Vec<u64>]) {
 }
 
 fn build_vector_inputs(indices: &[usize], values: &[u64]) -> Vec<(usize, u64)> {
-    indices
-        .iter()
-        .zip(values.iter())
-        .map(|(&index, &value)| (index, value))
-        .collect()
+    let mut inputs = Vec::with_capacity(indices.len() + 1);
+    inputs.push((ZERO_PUBLIC_INPUT_INDEX, 0));
+    inputs.extend(
+        indices
+            .iter()
+            .zip(values.iter())
+            .map(|(&index, &value)| (index, value)),
+    );
+    inputs
 }
 
 fn build_demo_matrix(rows: usize, cols: usize, start: u64) -> Vec<Vec<u64>> {
@@ -427,6 +431,14 @@ fn parse_positive_usize_arg(name: &str, raw: &str) -> Result<usize, String> {
     Ok(value)
 }
 
+fn fix_mat_export_input_config(num_inputs: usize) -> ExportInputConfig {
+    ExportInputConfig::from_public_values(
+        num_inputs,
+        vec![(ZERO_PUBLIC_INPUT_INDEX, Fr::from(0u64))],
+    )
+    .expect("fix-mat fixed zero public input should be valid")
+}
+
 fn usage_text() -> &'static str {
     "\
 用法:
@@ -478,15 +490,17 @@ mod circuit_tests {
         let generated = generate_circuit(FixMatRunConfig::square(4));
         let export = RmsLinearExport::from_r1cs_with_inputs(
             &generated.circuit.r1cs,
-            &ExportInputConfig::all_private(generated.circuit.r1cs.num_inputs),
+            &fix_mat_export_input_config(generated.circuit.r1cs.num_inputs),
         )
         .expect("导出带输入元数据的 RMS 失败");
 
-        assert_eq!(export.num_public_inputs, 1);
+        assert_eq!(export.num_public_inputs, 2);
         assert_eq!(export.public_inputs[0].index, 0);
         assert_eq!(export.public_inputs[0].value, "1");
+        assert_eq!(export.public_inputs[1].index, 1);
+        assert_eq!(export.public_inputs[1].value, "0");
         assert_eq!(export.num_private_inputs, 4);
-        assert_eq!(export.private_inputs, vec![1, 2, 3, 4]);
+        assert_eq!(export.private_inputs, vec![2, 3, 4, 5]);
     }
 }
 
