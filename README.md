@@ -106,6 +106,7 @@ Current exports use `rms-linear-v2`, which records:
 
 - `public_inputs` with concrete field values
 - `private_inputs` as index metadata only
+- `output_witnesses` as the exported sample output witness index list
 - `x0 = 1` as a reserved public input
 
 ## Development
@@ -133,5 +134,6 @@ cargo test -- --nocapture
   no self-loops and `p = min(8 / (n - 1), 1)`, which keeps expected out-degree roughly constant as
   `n` grows; demo private edge weights are then derived from `alpha = 17 / 20`.
 - Circom fixture batch runs are orchestrated by `scripts/run_fixture_circom_batch.sh`.
+- Scaling bin sweeps for the hand-written benchmarks can be launched via `scripts/run_scaling_bin_batch.sh`.
 - R1CS inspection helpers live in `scripts/analyze_r1cs.py` and `scripts/compare_circuits.py`.
 - Node dependencies in `package.json` are only needed for Circom/snarkjs-based fixture workflows.

@@ -244,7 +244,12 @@ pub fn compile_poly_to_rms_horner(poly: &RmsMultivariatePolynomial) -> (RmsLinea
     let mut compiler = RmsCompiler::new(poly.num_vars);
     let output_lc = compile_horner_recursive(poly, &poly.terms, 0, &mut compiler);
     let output_witness = compiler.materialize_lc(&output_lc);
-    (compiler.into_export(), output_witness)
+    (
+        compiler
+            .into_export()
+            .with_output_witnesses(vec![output_witness]),
+        output_witness,
+    )
 }
 
 fn checked_coeff_count(num_vars: usize, max_degree: usize) -> Result<usize, String> {
@@ -399,6 +404,7 @@ mod tests {
         assert_eq!(export.public_inputs[0].index, 0);
         assert_eq!(export.public_inputs[0].value, "1");
         assert!(output_witness >= 1);
+        assert_eq!(export.output_witnesses, vec![output_witness]);
         assert!(!export.constraints.is_empty());
     }
 

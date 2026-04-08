@@ -128,6 +128,7 @@ pub fn build_random_rms_linear<R: Rng>(
         constraints,
         &ExportInputConfig::all_private(num_inputs),
     )
+    .map(|export| export.with_output_witnesses(vec![num_witnesses]))
 }
 
 pub fn run() {
@@ -210,6 +211,7 @@ mod tests {
         assert_eq!(export.public_inputs[0].index, 0);
         assert_eq!(export.public_inputs[0].value, "1");
         assert_eq!(export.num_private_inputs, 3);
+        assert_eq!(export.output_witnesses, vec![7]);
 
         for (index, constraint) in export.constraints.iter().enumerate() {
             assert_eq!(constraint.index, index);

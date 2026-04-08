@@ -1,9 +1,9 @@
 use crate::evalr1cs::{execute_circuit, verify_assignment, Assignment};
 use crate::export::{
-    export_r1cs_bundle_with_inputs, load_r1cs_from_json, terms_to_export_string, ExportInputConfig,
+    load_r1cs_from_json, terms_to_export_string, write_export_bundle, ExportInputConfig,
     WrittenArtifacts,
 };
-use crate::r1cs::{Constraint, LinComb, Variable, R1CS};
+use crate::r1cs::{Constraint, LinComb, RmsLinearExport, Variable, R1CS};
 use crate::transform::{
     choudhuri_transform, eliminate_common_subexpressions_preserving_witnesses, TransformResult,
 };
@@ -264,11 +264,10 @@ pub fn export_circuit(
     transformed: &TransformedDbSelect,
 ) -> Result<DbSelectExportReport, Box<dyn std::error::Error>> {
     let input_config = export_input_config(generated)?;
-    export_r1cs_bundle_with_inputs(
-        &transformed.optimized,
-        &generated.config.export_stem,
-        &input_config,
-    )
+    let export = RmsLinearExport::from_r1cs_with_inputs(&transformed.optimized, &input_config)?
+        .with_output_witnesses(vec![generated.circuit.output_witness_index]);
+
+    write_export_bundle(&generated.config.export_stem, &export)
 }
 
 pub fn run_public() {
@@ -752,11 +751,16 @@ mod tests {
             &transformed.optimized,
             &export_input_config(&generated).expect("export config"),
         )
-        .expect("export");
+        .expect("export")
+        .with_output_witnesses(vec![generated.circuit.output_witness_index]);
 
         assert_eq!(export.num_public_inputs, 10);
         assert_eq!(export.num_private_inputs, 3);
         assert_eq!(export.private_inputs, vec![2, 3, 4]);
+        assert_eq!(
+            export.output_witnesses,
+            vec![generated.circuit.output_witness_index]
+        );
     }
 
     #[test]
@@ -771,10 +775,15 @@ mod tests {
             &transformed.optimized,
             &export_input_config(&generated).expect("export config"),
         )
-        .expect("export");
+        .expect("export")
+        .with_output_witnesses(vec![generated.circuit.output_witness_index]);
 
         assert_eq!(export.num_public_inputs, 2);
         assert_eq!(export.num_private_inputs, 11);
         assert_eq!(export.private_inputs, (2..13).collect::<Vec<_>>());
+        assert_eq!(
+            export.output_witnesses,
+            vec![generated.circuit.output_witness_index]
+        );
     }
 }

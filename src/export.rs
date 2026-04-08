@@ -39,6 +39,23 @@ struct LegacyRmsLinearExportV1 {
     constraints: Vec<ExportConstraint>,
 }
 
+#[derive(Clone, Debug, Deserialize)]
+struct LegacyRmsLinearExportV2 {
+    version: String,
+    num_inputs: usize,
+    #[serde(default)]
+    num_public_inputs: usize,
+    #[serde(default)]
+    num_private_inputs: usize,
+    #[serde(default)]
+    public_inputs: Vec<PublicInputValue>,
+    #[serde(default)]
+    private_inputs: Vec<usize>,
+    num_witnesses: usize,
+    execution_order: Vec<usize>,
+    constraints: Vec<ExportConstraint>,
+}
+
 impl OutputFormat {
     pub fn parse(raw: &str) -> Result<Self, String> {
         match raw {
@@ -184,6 +201,10 @@ pub fn load_r1cs_from_json<P: AsRef<Path>>(path: P) -> Result<RmsLinearExport, B
         return Ok(v2);
     }
 
+    if let Ok(v2_legacy) = serde_json::from_str::<LegacyRmsLinearExportV2>(&json) {
+        return Ok(v2_legacy.into());
+    }
+
     let legacy: LegacyRmsLinearExportV1 = serde_json::from_str(&json)?;
     Ok(legacy.into())
 }
@@ -192,6 +213,10 @@ pub fn load_r1cs_from_bin<P: AsRef<Path>>(path: P) -> Result<RmsLinearExport, Bo
     let bytes = fs::read(path)?;
     if let Ok(v2) = bincode::deserialize::<RmsLinearExport>(&bytes) {
         return Ok(v2);
+    }
+
+    if let Ok(v2_legacy) = bincode::deserialize::<LegacyRmsLinearExportV2>(&bytes) {
+        return Ok(v2_legacy.into());
     }
 
     let legacy: LegacyRmsLinearExportV1 = bincode::deserialize(&bytes)?;
@@ -273,6 +298,7 @@ pub fn build_rms_export_v2(
         public_inputs,
         private_inputs,
         num_witnesses,
+        output_witnesses: vec![],
         execution_order,
         constraints,
     })
@@ -301,6 +327,11 @@ impl RmsLinearExport {
             constraints,
             input_config,
         )?)
+    }
+
+    pub fn with_output_witnesses(mut self, output_witnesses: Vec<usize>) -> Self {
+        self.output_witnesses = output_witnesses;
+        self
     }
 }
 
@@ -458,6 +489,24 @@ impl From<LegacyRmsLinearExportV1> for RmsLinearExport {
             public_inputs: vec![],
             private_inputs,
             num_witnesses: value.num_witnesses,
+            output_witnesses: vec![],
+            execution_order: value.execution_order,
+            constraints: value.constraints,
+        }
+    }
+}
+
+impl From<LegacyRmsLinearExportV2> for RmsLinearExport {
+    fn from(value: LegacyRmsLinearExportV2) -> Self {
+        RmsLinearExport {
+            version: value.version,
+            num_inputs: value.num_inputs,
+            num_public_inputs: value.num_public_inputs,
+            num_private_inputs: value.num_private_inputs,
+            public_inputs: value.public_inputs,
+            private_inputs: value.private_inputs,
+            num_witnesses: value.num_witnesses,
+            output_witnesses: vec![],
             execution_order: value.execution_order,
             constraints: value.constraints,
         }

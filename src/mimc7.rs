@@ -1,9 +1,9 @@
 use crate::evalr1cs::{execute_circuit, verify_assignment, Assignment};
 use crate::export::{
-    export_r1cs_bundle_with_inputs, load_r1cs_from_json, terms_to_export_string, ExportInputConfig,
+    load_r1cs_from_json, terms_to_export_string, write_export_bundle, ExportInputConfig,
     WrittenArtifacts,
 };
-use crate::r1cs::{Constraint, LinComb, Variable, R1CS};
+use crate::r1cs::{Constraint, LinComb, RmsLinearExport, Variable, R1CS};
 use crate::transform::{
     choudhuri_transform, eliminate_common_subexpressions_preserving_witnesses, TransformResult,
 };
@@ -269,11 +269,13 @@ pub fn export_circuit(
     generated: &GeneratedMimc7,
     transformed: &TransformedMimc7,
 ) -> Result<Mimc7ExportReport, Box<dyn std::error::Error>> {
-    export_r1cs_bundle_with_inputs(
+    let export = RmsLinearExport::from_r1cs_with_inputs(
         &transformed.optimized,
-        &generated.config.export_stem,
         &ExportInputConfig::all_private(generated.circuit.r1cs.num_inputs),
-    )
+    )?
+    .with_output_witnesses(generated.circuit.round_output_witness_indices.clone());
+
+    write_export_bundle(&generated.config.export_stem, &export)
 }
 
 pub fn expected_round_outputs(num_rounds: usize, input_value: Fr) -> Result<Vec<Fr>, String> {
@@ -516,7 +518,8 @@ mod tests {
             &transformed.optimized,
             &ExportInputConfig::all_private(generated.circuit.r1cs.num_inputs),
         )
-        .expect("export");
+        .expect("export")
+        .with_output_witnesses(generated.circuit.round_output_witness_indices.clone());
 
         assert_eq!(export.version, "rms-linear-v2");
         assert_eq!(export.num_inputs, 2);
@@ -525,6 +528,10 @@ mod tests {
         assert_eq!(export.public_inputs[0].value, "1");
         assert_eq!(export.num_private_inputs, 1);
         assert_eq!(export.private_inputs, vec![1]);
+        assert_eq!(
+            export.output_witnesses,
+            generated.circuit.round_output_witness_indices
+        );
     }
 
     #[test]

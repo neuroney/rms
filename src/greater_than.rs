@@ -1,9 +1,9 @@
 use crate::evalr1cs::{execute_circuit, verify_assignment, Assignment};
 use crate::export::{
-    export_r1cs_bundle_with_inputs, load_r1cs_from_json, terms_to_export_string, ExportInputConfig,
+    load_r1cs_from_json, terms_to_export_string, write_export_bundle, ExportInputConfig,
     WrittenArtifacts,
 };
-use crate::r1cs::{Constraint, LinComb, Variable, R1CS};
+use crate::r1cs::{Constraint, LinComb, RmsLinearExport, Variable, R1CS};
 use crate::transform::{choudhuri_transform, eliminate_common_subexpressions, TransformResult};
 use crate::utils::{fr_to_u64, print_constraints};
 use ark_bn254::Fr;
@@ -288,11 +288,13 @@ pub fn export_circuit(
     generated: &GeneratedGreaterThan,
     transformed: &TransformedGreaterThan,
 ) -> Result<GreaterThanExportReport, Box<dyn std::error::Error>> {
-    export_r1cs_bundle_with_inputs(
+    let export = RmsLinearExport::from_r1cs_with_inputs(
         &transformed.optimized,
-        &generated.config.export_stem,
         &greater_than_export_input_config(generated.circuit.r1cs.num_inputs),
-    )
+    )?
+    .with_output_witnesses(vec![generated.circuit.output_witness_index]);
+
+    write_export_bundle(&generated.config.export_stem, &export)
 }
 
 pub fn run() {
@@ -593,6 +595,7 @@ fn usage_text() -> &'static str {
 #[cfg(test)]
 mod circuit_tests {
     use super::*;
+    use crate::r1cs::RmsLinearExport;
 
     fn build_greater_than_assignment(
         circuit: &GreaterThanCircuit,
@@ -700,6 +703,26 @@ mod circuit_tests {
                 expected
             );
         }
+    }
+
+    #[test]
+    fn export_marks_operand_bits_private_and_records_output_witness() {
+        let generated = generate_circuit(GreaterThanRunConfig::for_bits(4));
+        let transformed = transform_circuit(&generated);
+        let export = RmsLinearExport::from_r1cs_with_inputs(
+            &transformed.optimized,
+            &greater_than_export_input_config(generated.circuit.r1cs.num_inputs),
+        )
+        .expect("export")
+        .with_output_witnesses(vec![generated.circuit.output_witness_index]);
+
+        assert_eq!(export.num_public_inputs, 2);
+        assert_eq!(export.num_private_inputs, 8);
+        assert_eq!(export.private_inputs, (2..10).collect::<Vec<_>>());
+        assert_eq!(
+            export.output_witnesses,
+            vec![generated.circuit.output_witness_index]
+        );
     }
 }
 

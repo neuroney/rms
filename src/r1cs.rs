@@ -42,6 +42,8 @@ pub struct RmsLinearExport {
     #[serde(default)]
     pub private_inputs: Vec<usize>,
     pub num_witnesses: usize,
+    #[serde(default)]
+    pub output_witnesses: Vec<usize>,
     pub execution_order: Vec<usize>,
     pub constraints: Vec<ExportConstraint>,
 }

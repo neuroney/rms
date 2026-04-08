@@ -1,9 +1,9 @@
 use crate::evalr1cs::{execute_circuit, verify_assignment, Assignment};
 use crate::export::{
-    export_r1cs_bundle_with_inputs, load_r1cs_from_json, terms_to_export_string, ExportInputConfig,
+    load_r1cs_from_json, terms_to_export_string, write_export_bundle, ExportInputConfig,
     WrittenArtifacts,
 };
-use crate::r1cs::{Constraint, LinComb, Variable, R1CS};
+use crate::r1cs::{Constraint, LinComb, RmsLinearExport, Variable, R1CS};
 use crate::transform::{
     choudhuri_transform, eliminate_common_subexpressions_preserving_witnesses, TransformResult,
 };
@@ -398,11 +398,13 @@ pub fn export_circuit(
     generated: &GeneratedPageRank,
     transformed: &TransformedPageRank,
 ) -> Result<PageRankExportReport, Box<dyn std::error::Error>> {
-    export_r1cs_bundle_with_inputs(
+    let export = RmsLinearExport::from_r1cs_with_inputs(
         &transformed.optimized,
-        &generated.config.export_stem,
         &page_rank_export_input_config(generated.circuit.r1cs.num_inputs),
-    )
+    )?
+    .with_output_witnesses(generated.circuit.output_witness_indices.clone());
+
+    write_export_bundle(&generated.config.export_stem, &export)
 }
 
 pub fn run() {
@@ -1145,7 +1147,8 @@ mod circuit_tests {
             &generated.circuit.r1cs,
             &page_rank_export_input_config(generated.circuit.r1cs.num_inputs),
         )
-        .expect("导出带输入元数据的 RMS 失败");
+        .expect("导出带输入元数据的 RMS 失败")
+        .with_output_witnesses(generated.circuit.output_witness_indices.clone());
 
         assert_eq!(export.num_public_inputs, 1);
         assert_eq!(export.public_inputs[0].index, 0);
@@ -1163,6 +1166,10 @@ mod circuit_tests {
             .copied()
             .collect::<Vec<_>>();
         assert_eq!(export.private_inputs, expected_private_inputs);
+        assert_eq!(
+            export.output_witnesses,
+            generated.circuit.output_witness_indices
+        );
     }
 
     #[test]

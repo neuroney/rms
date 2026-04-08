@@ -5,10 +5,10 @@ pub use crate::circom_reader::{
 };
 use crate::evalr1cs::{execute_circuit, verify_assignment, Assignment};
 use crate::export::{
-    export_r1cs_bundle_with_inputs, load_r1cs_from_json, terms_to_export_string, ExportInputConfig,
+    load_r1cs_from_json, terms_to_export_string, write_export_bundle, ExportInputConfig,
     WrittenArtifacts,
 };
-use crate::r1cs::R1CS;
+use crate::r1cs::{RmsLinearExport, R1CS};
 use crate::transform::{eliminate_common_subexpressions, try_choudhuri_transform, TransformResult};
 use crate::utils::{coeff_to_string, print_constraints};
 use ark_bn254::Fr;
@@ -277,11 +277,10 @@ pub fn export_circuit(
         .ok_or("Circom 路径没有可用文件名")?;
 
     let input_config = build_export_input_config(generated)?;
-    export_r1cs_bundle_with_inputs(
-        &transformed.optimized,
-        &format!("data/{}", stem),
-        &input_config,
-    )
+    let export = RmsLinearExport::from_r1cs_with_inputs(&transformed.optimized, &input_config)?
+        .with_output_witnesses(export_output_witnesses(generated));
+
+    write_export_bundle(&format!("data/{}", stem), &export)
 }
 
 fn build_export_input_config(
@@ -318,6 +317,22 @@ fn build_export_input_config(
         num_inputs,
         public_inputs,
     )?)
+}
+
+fn export_output_witnesses(generated: &GeneratedCircom) -> Vec<usize> {
+    generated
+        .imported
+        .layout
+        .public_output_signal_ids
+        .iter()
+        .filter_map(|signal_id| {
+            generated
+                .imported
+                .witness_signal_to_index
+                .get(signal_id)
+                .copied()
+        })
+        .collect()
 }
 
 pub fn run(path: &str) {
