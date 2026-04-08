@@ -27,10 +27,9 @@ src/
   r1cs.rs           # shared circuit data structures
   transform.rs      # Choudhuri transform and CSE
   utils.rs          # shared formatting and field helpers
-data/               # exported artifacts and reusable generated outputs
+data/               # runtime-generated exported artifacts
 fixtures/           # checked-in Circom inputs and example artifacts
-scripts/            # Circom batch and R1CS analysis helpers
-docs/               # repository structure notes
+scripts/            # scaling and R1CS analysis helpers
 ```
 
 Public API is organized under:
@@ -82,7 +81,7 @@ cargo run -- page_rank 32 8
 cargo run -- random_mul 8 128
 cargo run -- random_linear 8 128
 cargo run -- dense_poly 6 3
-cargo run -- circom fixtures/circomlib_and_o0.json
+cargo run -- circom fixtures/circomlib_and.json
 ```
 
 `cargo run` defaults to the `twomat` command.
@@ -133,7 +132,6 @@ cargo test -- --nocapture
 - `page_rank` samples a sparse directed graph for the public support pattern by default:
   no self-loops and `p = min(8 / (n - 1), 1)`, which keeps expected out-degree roughly constant as
   `n` grows; demo private edge weights are then derived from `alpha = 17 / 20`.
-- Circom fixture batch runs are orchestrated by `scripts/run_fixture_circom_batch.sh`.
 - Scaling bin sweeps for the hand-written benchmarks can be launched via `scripts/run_scaling_bin_batch.sh`.
-- R1CS inspection helpers live in `scripts/analyze_r1cs.py` and `scripts/compare_circuits.py`.
+- R1CS inspection helpers live in `scripts/analyze_r1cs.py`.
 - Node dependencies in `package.json` are only needed for Circom/snarkjs-based fixture workflows.

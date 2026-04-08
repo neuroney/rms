@@ -3,7 +3,7 @@ use crate::r1cs::{
 };
 use ark_bn254::Fr;
 use ark_ff::{One, PrimeField};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fs;
@@ -28,32 +28,6 @@ pub struct WrittenArtifacts {
 #[derive(Clone, Debug)]
 pub struct ExportInputConfig {
     public_inputs: Vec<(usize, Fr)>,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-struct LegacyRmsLinearExportV1 {
-    version: String,
-    num_inputs: usize,
-    num_witnesses: usize,
-    execution_order: Vec<usize>,
-    constraints: Vec<ExportConstraint>,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-struct LegacyRmsLinearExportV2 {
-    version: String,
-    num_inputs: usize,
-    #[serde(default)]
-    num_public_inputs: usize,
-    #[serde(default)]
-    num_private_inputs: usize,
-    #[serde(default)]
-    public_inputs: Vec<PublicInputValue>,
-    #[serde(default)]
-    private_inputs: Vec<usize>,
-    num_witnesses: usize,
-    execution_order: Vec<usize>,
-    constraints: Vec<ExportConstraint>,
 }
 
 impl OutputFormat {
@@ -197,30 +171,12 @@ pub fn write_r1cs<P: AsRef<Path>>(
 
 pub fn load_r1cs_from_json<P: AsRef<Path>>(path: P) -> Result<RmsLinearExport, Box<dyn Error>> {
     let json = fs::read_to_string(path)?;
-    if let Ok(v2) = serde_json::from_str::<RmsLinearExport>(&json) {
-        return Ok(v2);
-    }
-
-    if let Ok(v2_legacy) = serde_json::from_str::<LegacyRmsLinearExportV2>(&json) {
-        return Ok(v2_legacy.into());
-    }
-
-    let legacy: LegacyRmsLinearExportV1 = serde_json::from_str(&json)?;
-    Ok(legacy.into())
+    Ok(serde_json::from_str(&json)?)
 }
 
 pub fn load_r1cs_from_bin<P: AsRef<Path>>(path: P) -> Result<RmsLinearExport, Box<dyn Error>> {
     let bytes = fs::read(path)?;
-    if let Ok(v2) = bincode::deserialize::<RmsLinearExport>(&bytes) {
-        return Ok(v2);
-    }
-
-    if let Ok(v2_legacy) = bincode::deserialize::<LegacyRmsLinearExportV2>(&bytes) {
-        return Ok(v2_legacy.into());
-    }
-
-    let legacy: LegacyRmsLinearExportV1 = bincode::deserialize(&bytes)?;
-    Ok(legacy.into())
+    Ok(bincode::deserialize(&bytes)?)
 }
 
 pub fn export_r1cs_bundle(
@@ -281,7 +237,7 @@ pub fn print_export_constraints_preview(export: &RmsLinearExport, limit: usize) 
     }
 }
 
-pub fn build_rms_export_v2(
+pub fn build_rms_export(
     num_inputs: usize,
     num_witnesses: usize,
     execution_order: Vec<usize>,
@@ -320,7 +276,7 @@ impl RmsLinearExport {
             .map(|(index, constraint)| export_constraint(index, constraint))
             .collect::<Result<Vec<_>, _>>()?;
 
-        Ok(build_rms_export_v2(
+        Ok(build_rms_export(
             r1cs.num_inputs,
             r1cs.num_witnesses,
             (0..constraints.len()).collect(),
@@ -477,38 +433,102 @@ fn ensure_parent_dir(path: &Path) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-impl From<LegacyRmsLinearExportV1> for RmsLinearExport {
-    fn from(value: LegacyRmsLinearExportV1) -> Self {
-        let private_inputs = (0..value.num_inputs).collect::<Vec<_>>();
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
+    fn temp_export_path(extension: &str) -> std::path::PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time should be after unix epoch")
+            .as_nanos();
+        std::env::temp_dir().join(format!(
+            "rms_export_test_{}_{}.{}",
+            std::process::id(),
+            unique,
+            extension
+        ))
+    }
+
+    fn sample_export() -> RmsLinearExport {
         RmsLinearExport {
-            version: value.version,
-            num_inputs: value.num_inputs,
-            num_public_inputs: 0,
-            num_private_inputs: private_inputs.len(),
-            public_inputs: vec![],
-            private_inputs,
-            num_witnesses: value.num_witnesses,
-            output_witnesses: vec![],
-            execution_order: value.execution_order,
-            constraints: value.constraints,
+            version: "rms-linear-v2".to_string(),
+            num_inputs: 2,
+            num_public_inputs: 1,
+            num_private_inputs: 1,
+            public_inputs: vec![PublicInputValue {
+                index: 0,
+                value: "1".to_string(),
+            }],
+            private_inputs: vec![1],
+            num_witnesses: 1,
+            output_witnesses: vec![1],
+            execution_order: vec![0],
+            constraints: vec![ExportConstraint {
+                index: 0,
+                a_in: vec![Term {
+                    index: 0,
+                    coeff: "1".to_string(),
+                }],
+                b_wit: vec![Term {
+                    index: 1,
+                    coeff: "1".to_string(),
+                }],
+                output_witness: 1,
+            }],
         }
     }
-}
 
-impl From<LegacyRmsLinearExportV2> for RmsLinearExport {
-    fn from(value: LegacyRmsLinearExportV2) -> Self {
-        RmsLinearExport {
-            version: value.version,
-            num_inputs: value.num_inputs,
-            num_public_inputs: value.num_public_inputs,
-            num_private_inputs: value.num_private_inputs,
-            public_inputs: value.public_inputs,
-            private_inputs: value.private_inputs,
-            num_witnesses: value.num_witnesses,
-            output_witnesses: vec![],
-            execution_order: value.execution_order,
-            constraints: value.constraints,
-        }
+    #[test]
+    fn loads_current_json_export() {
+        let path = temp_export_path("json");
+        let export = sample_export();
+        write_json_pretty_file(&path, &export).expect("写入当前 JSON 导出失败");
+
+        let loaded = load_r1cs_from_json(&path).expect("读取当前 JSON 导出失败");
+
+        assert_eq!(loaded, export);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn loads_current_bin_export() {
+        let path = temp_export_path("bin");
+        let export = sample_export();
+        write_bin_file(&path, &export).expect("写入当前 BIN 导出失败");
+
+        let loaded = load_r1cs_from_bin(&path).expect("读取当前 BIN 导出失败");
+
+        assert_eq!(loaded, export);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn rejects_legacy_json_export_without_current_fields() {
+        let path = temp_export_path("json");
+        let legacy = r#"{
+  "version": "rms-linear-v1",
+  "num_inputs": 2,
+  "num_witnesses": 1,
+  "execution_order": [0],
+  "constraints": [
+    {
+      "index": 0,
+      "a_in": [{"index": 0, "coeff": "1"}],
+      "b_wit": [{"index": 1, "coeff": "1"}],
+      "output_witness": 1
+    }
+  ]
+}"#;
+        fs::write(&path, legacy).expect("写入 legacy JSON 导出失败");
+
+        let error = load_r1cs_from_json(&path).expect_err("legacy JSON 不应再被接受");
+
+        assert!(
+            error.to_string().contains("missing field"),
+            "unexpected error: {error}"
+        );
+        let _ = fs::remove_file(path);
     }
 }

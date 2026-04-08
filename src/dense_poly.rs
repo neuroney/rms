@@ -1,5 +1,5 @@
 use crate::export::{
-    build_rms_export_v2, print_export_constraints_preview, write_export_bundle, ExportInputConfig,
+    build_rms_export, print_export_constraints_preview, write_export_bundle, ExportInputConfig,
 };
 use crate::r1cs::{ExportConstraint, RmsLinearExport, Term};
 use rand::{rngs::StdRng, Rng, SeedableRng};
@@ -168,14 +168,14 @@ impl RmsCompiler {
     fn into_export(self) -> RmsLinearExport {
         let num_witnesses = self.next_witness - 1;
         let execution_order = (0..self.constraints.len()).collect();
-        build_rms_export_v2(
+        build_rms_export(
             self.num_inputs,
             num_witnesses,
             execution_order,
             self.constraints,
             &ExportInputConfig::all_private(self.num_inputs),
         )
-        .expect("dense poly v2 export should be valid")
+        .expect("dense poly export should be valid")
     }
 }
 

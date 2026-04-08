@@ -348,7 +348,6 @@ version = "0.1.0"
 dependencies = [
  "ark-bn254",
  "ark-ff",
- "ark-std",
  "bincode",
  "rand",
  "serde",

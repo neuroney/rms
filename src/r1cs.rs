@@ -5,7 +5,7 @@ use std::collections::HashMap;
 /// Represents variables in the constraint system.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Variable {
-    Input(usize),   // Input slot, index starts from 0; v2 exports reserve x0 = 1 as public
+    Input(usize),   // Input slot, index starts from 0; RMS exports reserve x0 = 1 as public
     Witness(usize), // Private witness, index starts from 1
 }
 
@@ -33,16 +33,11 @@ pub struct PublicInputValue {
 pub struct RmsLinearExport {
     pub version: String,
     pub num_inputs: usize,
-    #[serde(default)]
     pub num_public_inputs: usize,
-    #[serde(default)]
     pub num_private_inputs: usize,
-    #[serde(default)]
     pub public_inputs: Vec<PublicInputValue>,
-    #[serde(default)]
     pub private_inputs: Vec<usize>,
     pub num_witnesses: usize,
-    #[serde(default)]
     pub output_witnesses: Vec<usize>,
     pub execution_order: Vec<usize>,
     pub constraints: Vec<ExportConstraint>,

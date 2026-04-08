@@ -1,5 +1,5 @@
 use crate::export::{
-    build_rms_export_v2, print_export_constraints_preview, write_export_bundle, ExportInputConfig,
+    build_rms_export, print_export_constraints_preview, write_export_bundle, ExportInputConfig,
 };
 use crate::r1cs::{ExportConstraint, RmsLinearExport, Term};
 use rand::{rngs::StdRng, Rng, SeedableRng};
@@ -66,7 +66,7 @@ pub fn build_random_rms<R: Rng>(
         });
     }
 
-    build_rms_export_v2(
+    build_rms_export(
         num_inputs,
         num_witnesses,
         execution_order,
