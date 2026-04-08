@@ -99,7 +99,8 @@ Parameter summary:
 - `random_linear`: `num_inputs num_constraints`
 - `dense_poly`: `num_vars degree`
 
-Commands export `.json` and `.bin` files under `data/`.
+Commands export `.bin` files under `data/` by default.
+Append `--json` to also emit a matching `.json` file.
 
 Current exports use `rms-linear-v2`, which records:
 

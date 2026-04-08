@@ -53,24 +53,25 @@ RMS Toolkit
 
 用法:
   cargo run
-  cargo run -- fixmat [dim]
-  cargo run -- twomat [dim]
-  cargo run -- pubdb [x]
-  cargo run -- privdb [x]
-  cargo run -- greater_than [bit]
-  cargo run -- mimc7 [num_rounds]
-  cargo run -- page_rank [iterations]
-  cargo run -- page_rank [num_vertices iterations]
-  cargo run -- random_mul [num_inputs num_constraints]
-  cargo run -- random_linear [num_inputs num_constraints]
-  cargo run -- dense_poly [num_vars degree]
-  cargo run -- import <constraints.json|circuit.r1cs|circuit.circom>
-  cargo run -- circom <constraints.json|circuit.r1cs|circuit.circom>
+  cargo run -- fixmat [dim] [--json]
+  cargo run -- twomat [dim] [--json]
+  cargo run -- pubdb [x] [--json]
+  cargo run -- privdb [x] [--json]
+  cargo run -- greater_than [bit] [--json]
+  cargo run -- mimc7 [num_rounds] [--json]
+  cargo run -- page_rank [iterations] [--json]
+  cargo run -- page_rank [num_vertices iterations] [--json]
+  cargo run -- random_mul [num_inputs num_constraints] [--json]
+  cargo run -- random_linear [num_inputs num_constraints] [--json]
+  cargo run -- dense_poly [num_vars degree] [--json]
+  cargo run -- import <constraints.json|circuit.r1cs|circuit.circom> [--json]
+  cargo run -- circom <constraints.json|circuit.r1cs|circuit.circom> [--json]
 
 说明:
   默认运行 TwoMat 示例。
   内置 11 个核心命令: circom、dense_poly、fixmat、greater_than、mimc7、page_rank、privdb、pubdb、random_linear、random_mul、twomat。
   其中 10 个走 Rust 代码路径生成最终 RMS 工件；`circom` 负责从通用 Circom 电路导入并转换为 RMS。
   `fixmat` 接收公开固定矩阵与私有向量乘法的方阵维度，`twomat` 接收两个私有方阵乘法的维度。
-  `page_rank` 支持 `iterations` 或 `num_vertices iterations`，`pubdb`/`privdb` 接收指数 `x` 并设置 `n=2^x`，其余命令支持对应的核心规模参数。"
+  `page_rank` 支持 `iterations` 或 `num_vertices iterations`，`pubdb`/`privdb` 接收指数 `x` 并设置 `n=2^x`，其余命令支持对应的核心规模参数。
+  默认只导出 .bin；追加 `--json` 时同时导出 .json。"
 }

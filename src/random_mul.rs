@@ -1,5 +1,6 @@
 use crate::export::{
-    build_rms_export, print_export_constraints_preview, write_export_bundle, ExportInputConfig,
+    build_rms_export, print_export_constraints_preview, split_export_cli_args,
+    write_export_bundle_with_options, ExportBundleOptions, ExportInputConfig,
 };
 use crate::r1cs::{ExportConstraint, RmsLinearExport, Term};
 use rand::{rngs::StdRng, Rng, SeedableRng};
@@ -88,7 +89,8 @@ pub fn run_with_args(args: &[String]) -> Result<(), String> {
         return Err(usage_text().to_string());
     }
 
-    let config = match args {
+    let (args, export_options) = split_export_cli_args(args);
+    let config = match args.as_slice() {
         [] => RandomMulRunConfig::demo(),
         [num_inputs, num_constraints] => RandomMulRunConfig::new(
             parse_usize_arg("num_inputs", num_inputs)?,
@@ -98,13 +100,16 @@ pub fn run_with_args(args: &[String]) -> Result<(), String> {
         _ => return Err(usage_text().to_string()),
     };
 
-    run_with_config(config)
+    run_with_config(config, export_options)
 }
 
-fn run_with_config(config: RandomMulRunConfig) -> Result<(), String> {
+fn run_with_config(
+    config: RandomMulRunConfig,
+    export_options: ExportBundleOptions,
+) -> Result<(), String> {
     let mut rng = StdRng::seed_from_u64(config.seed);
     let export = build_random_rms(config.num_inputs, config.num_constraints, &mut rng)?;
-    let report = write_export_bundle(&config.export_stem, &export)
+    let report = write_export_bundle_with_options(&config.export_stem, &export, export_options)
         .map_err(|err| format!("导出随机 mul RMS 电路失败: {err}"))?;
 
     println!("\n╔══════════════════════════════════════════════════╗");
@@ -113,10 +118,14 @@ fn run_with_config(config: RandomMulRunConfig) -> Result<(), String> {
     println!("  输入数: {}", export.num_inputs);
     println!("  约束数: {}", export.constraints.len());
     println!("  witness 数: {}", export.num_witnesses);
-    println!("  JSON: {}", report.json_path);
     println!("  BIN:  {}", report.bin_path);
+    if let Some(json_path) = &report.json_path {
+        println!("  JSON: {}", json_path);
+    }
     println!("  版本: {}", report.version);
-    println!("  JSON/BIN 内容一致: {}", report.json_bin_match);
+    if let Some(json_bin_match) = report.json_bin_match {
+        println!("  JSON/BIN 内容一致: {}", json_bin_match);
+    }
     println!("  前 8 条 RMS 约束:");
     print_export_constraints_preview(&export, 8);
 
@@ -131,12 +140,13 @@ fn parse_usize_arg(name: &str, raw: &str) -> Result<usize, String> {
 fn usage_text() -> &'static str {
     "\
 用法:
-  cargo run -- random_mul
-  cargo run -- random_mul <num_inputs> <num_constraints>
-  cargo run --example random_mul -- <num_inputs> <num_constraints>
+  cargo run -- random_mul [--json]
+  cargo run -- random_mul <num_inputs> <num_constraints> [--json]
+  cargo run --example random_mul -- <num_inputs> <num_constraints> [--json]
 
 说明:
-  默认值: num_inputs=5, num_constraints=64"
+  默认值: num_inputs=5, num_constraints=64。
+  默认只导出 .bin；追加 --json 时同时导出 .json。"
 }
 
 #[cfg(test)]

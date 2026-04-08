@@ -1,7 +1,7 @@
 use crate::evalr1cs::{execute_circuit, verify_assignment, Assignment};
 use crate::export::{
-    load_r1cs_from_json, terms_to_export_string, write_export_bundle, ExportInputConfig,
-    WrittenArtifacts,
+    load_r1cs_from_bin, split_export_cli_args, terms_to_export_string,
+    write_export_bundle_with_options, ExportBundleOptions, ExportInputConfig, WrittenArtifacts,
 };
 use crate::r1cs::{Constraint, LinComb, RmsLinearExport, Variable, R1CS};
 use crate::transform::{choudhuri_transform, eliminate_common_subexpressions, TransformResult};
@@ -215,6 +215,14 @@ pub fn export_circuit(
     generated: &GeneratedTwoMat,
     transformed: &TransformedTwoMat,
 ) -> Result<TwoMatExportReport, Box<dyn std::error::Error>> {
+    export_circuit_with_options(generated, transformed, ExportBundleOptions::default())
+}
+
+pub fn export_circuit_with_options(
+    generated: &GeneratedTwoMat,
+    transformed: &TransformedTwoMat,
+    export_options: ExportBundleOptions,
+) -> Result<TwoMatExportReport, Box<dyn std::error::Error>> {
     let export = RmsLinearExport::from_r1cs_with_inputs(
         &transformed.optimized,
         &ExportInputConfig::all_private(generated.circuit.r1cs.num_inputs),
@@ -229,7 +237,7 @@ pub fn export_circuit(
             .collect(),
     );
 
-    write_export_bundle(&generated.config.export_stem, &export)
+    write_export_bundle_with_options(&generated.config.export_stem, &export, export_options)
 }
 
 pub fn run() {
@@ -244,20 +252,24 @@ pub fn run_with_args(args: &[String]) -> Result<(), String> {
         return Err(usage_text().to_string());
     }
 
-    let config = match args {
+    let (args, export_options) = split_export_cli_args(args);
+    let config = match args.as_slice() {
         [] => TwoMatRunConfig::demo(),
         [dim] => TwoMatRunConfig::square(parse_positive_usize_arg("dim", dim)?),
         _ => return Err(usage_text().to_string()),
     };
 
-    run_with_config(config)
+    run_with_config(config, export_options)
 }
 
-fn run_with_config(config: TwoMatRunConfig) -> Result<(), String> {
+fn run_with_config(
+    config: TwoMatRunConfig,
+    export_options: ExportBundleOptions,
+) -> Result<(), String> {
     let generated = generate_circuit(config);
     let transformed = transform_circuit(&generated);
     let evaluation = evaluate_equivalence(&generated, &transformed);
-    let export = export_circuit(&generated, &transformed)
+    let export = export_circuit_with_options(&generated, &transformed, export_options)
         .map_err(|err| format!("导出 TwoMat RMS 电路失败: {err}"))?;
 
     println!("\n╔══════════════════════════════════════════════════╗");
@@ -305,14 +317,18 @@ fn run_with_config(config: TwoMatRunConfig) -> Result<(), String> {
     );
 
     println!("\n【4. 电路导出】");
-    println!("  JSON: {}", export.json_path);
     println!("  BIN:  {}", export.bin_path);
+    if let Some(json_path) = &export.json_path {
+        println!("  JSON: {}", json_path);
+    }
     println!("  版本: {}", export.version);
     println!("  约束数: {}", export.num_constraints);
-    println!("  JSON/BIN 内容一致: {}", export.json_bin_match);
+    if let Some(json_bin_match) = export.json_bin_match {
+        println!("  JSON/BIN 内容一致: {}", json_bin_match);
+    }
     println!("  前 5 条最终 RMS 约束:");
-    let exported_json = load_r1cs_from_json(&export.json_path).expect("读取 JSON 导出文件失败");
-    for constraint in exported_json.constraints.iter().take(5) {
+    let exported_bin = load_r1cs_from_bin(&export.bin_path).expect("读取 BIN 导出文件失败");
+    for constraint in exported_bin.constraints.iter().take(5) {
         println!(
             "    step {:>2}: ({} ) * ({} ) -> w{}",
             constraint.index,
@@ -442,12 +458,13 @@ fn parse_positive_usize_arg(name: &str, raw: &str) -> Result<usize, String> {
 fn usage_text() -> &'static str {
     "\
 用法:
-  cargo run -- twomat
-  cargo run -- twomat <dim>
+  cargo run -- twomat [--json]
+  cargo run -- twomat <dim> [--json]
 
 说明:
   默认值: 4x4 乘 4x4。
-  两个操作数 M1、M2 都是私有 n x n 矩阵输入。"
+  两个操作数 M1、M2 都是私有 n x n 矩阵输入。
+  默认只导出 .bin；追加 --json 时同时导出 .json。"
 }
 
 #[cfg(test)]

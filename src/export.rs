@@ -16,13 +16,18 @@ pub enum OutputFormat {
     Bin,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ExportBundleOptions {
+    pub emit_json: bool,
+}
+
 #[derive(Clone, Debug)]
 pub struct WrittenArtifacts {
-    pub json_path: String,
+    pub json_path: Option<String>,
     pub bin_path: String,
     pub version: String,
     pub num_constraints: usize,
-    pub json_bin_match: bool,
+    pub json_bin_match: Option<bool>,
 }
 
 #[derive(Clone, Debug)]
@@ -47,6 +52,36 @@ impl OutputFormat {
             OutputFormat::Bin => "bin",
         }
     }
+}
+
+impl Default for ExportBundleOptions {
+    fn default() -> Self {
+        Self::bin_only()
+    }
+}
+
+impl ExportBundleOptions {
+    pub const fn bin_only() -> Self {
+        Self { emit_json: false }
+    }
+
+    pub const fn with_json() -> Self {
+        Self { emit_json: true }
+    }
+}
+
+pub fn split_export_cli_args(args: &[String]) -> (Vec<String>, ExportBundleOptions) {
+    let mut filtered = Vec::with_capacity(args.len());
+    let mut options = ExportBundleOptions::default();
+
+    for arg in args {
+        match arg.as_str() {
+            "--json" => options.emit_json = true,
+            _ => filtered.push(arg.clone()),
+        }
+    }
+
+    (filtered, options)
 }
 
 impl ExportInputConfig {
@@ -183,15 +218,16 @@ pub fn export_r1cs_bundle(
     r1cs: &R1CS,
     export_stem: &str,
 ) -> Result<WrittenArtifacts, Box<dyn Error>> {
-    let stem_with_constraints =
-        append_constraint_count_to_stem(export_stem, r1cs.constraints.len());
-    let json_path = format!("{}.json", stem_with_constraints);
-    let bin_path = format!("{}.bin", stem_with_constraints);
+    export_r1cs_bundle_with_options(r1cs, export_stem, ExportBundleOptions::default())
+}
 
-    export_r1cs_to_json(r1cs, &json_path)?;
-    export_r1cs_to_bin(r1cs, &bin_path)?;
-
-    summarize_written_artifacts(json_path, bin_path)
+pub fn export_r1cs_bundle_with_options(
+    r1cs: &R1CS,
+    export_stem: &str,
+    options: ExportBundleOptions,
+) -> Result<WrittenArtifacts, Box<dyn Error>> {
+    let export = RmsLinearExport::from_r1cs(r1cs)?;
+    write_export_bundle_with_options(export_stem, &export, options)
 }
 
 pub fn export_r1cs_bundle_with_inputs(
@@ -199,27 +235,46 @@ pub fn export_r1cs_bundle_with_inputs(
     export_stem: &str,
     input_config: &ExportInputConfig,
 ) -> Result<WrittenArtifacts, Box<dyn Error>> {
-    let stem_with_constraints =
-        append_constraint_count_to_stem(export_stem, r1cs.constraints.len());
-    let json_path = format!("{}.json", stem_with_constraints);
-    let bin_path = format!("{}.bin", stem_with_constraints);
+    export_r1cs_bundle_with_inputs_and_options(
+        r1cs,
+        export_stem,
+        input_config,
+        ExportBundleOptions::default(),
+    )
+}
 
-    export_r1cs_to_json_with_inputs(r1cs, &json_path, input_config)?;
-    export_r1cs_to_bin_with_inputs(r1cs, &bin_path, input_config)?;
-
-    summarize_written_artifacts(json_path, bin_path)
+pub fn export_r1cs_bundle_with_inputs_and_options(
+    r1cs: &R1CS,
+    export_stem: &str,
+    input_config: &ExportInputConfig,
+    options: ExportBundleOptions,
+) -> Result<WrittenArtifacts, Box<dyn Error>> {
+    let export = RmsLinearExport::from_r1cs_with_inputs(r1cs, input_config)?;
+    write_export_bundle_with_options(export_stem, &export, options)
 }
 
 pub fn write_export_bundle(
     export_stem: &str,
     export: &RmsLinearExport,
 ) -> Result<WrittenArtifacts, Box<dyn Error>> {
+    write_export_bundle_with_options(export_stem, export, ExportBundleOptions::default())
+}
+
+pub fn write_export_bundle_with_options(
+    export_stem: &str,
+    export: &RmsLinearExport,
+    options: ExportBundleOptions,
+) -> Result<WrittenArtifacts, Box<dyn Error>> {
     let stem_with_constraints =
         append_constraint_count_to_stem(export_stem, export.constraints.len());
-    let json_path = format!("{}.json", stem_with_constraints);
+    let json_path = options
+        .emit_json
+        .then(|| format!("{}.json", stem_with_constraints));
     let bin_path = format!("{}.bin", stem_with_constraints);
 
-    write_r1cs(&json_path, export, OutputFormat::Json)?;
+    if let Some(path) = &json_path {
+        write_r1cs(path, export, OutputFormat::Json)?;
+    }
     write_r1cs(&bin_path, export, OutputFormat::Bin)?;
 
     summarize_written_artifacts(json_path, bin_path)
@@ -383,16 +438,19 @@ fn append_constraint_count_to_stem(export_stem: &str, num_constraints: usize) ->
 }
 
 fn summarize_written_artifacts(
-    json_path: String,
+    json_path: Option<String>,
     bin_path: String,
 ) -> Result<WrittenArtifacts, Box<dyn Error>> {
-    let exported_json = load_r1cs_from_json(&json_path)?;
     let exported_bin = load_r1cs_from_bin(&bin_path)?;
+    let json_bin_match = match json_path.as_ref() {
+        Some(path) => Some(load_r1cs_from_json(path)? == exported_bin),
+        None => None,
+    };
 
     Ok(WrittenArtifacts {
-        version: exported_json.version.clone(),
-        num_constraints: exported_json.constraints.len(),
-        json_bin_match: exported_json == exported_bin,
+        version: exported_bin.version.clone(),
+        num_constraints: exported_bin.constraints.len(),
+        json_bin_match,
         json_path,
         bin_path,
     })
@@ -436,6 +494,7 @@ fn ensure_parent_dir(path: &Path) -> Result<(), Box<dyn Error>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn temp_export_path(extension: &str) -> std::path::PathBuf {
@@ -449,6 +508,21 @@ mod tests {
             unique,
             extension
         ))
+    }
+
+    fn temp_export_stem() -> String {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time should be after unix epoch")
+            .as_nanos();
+        std::env::temp_dir()
+            .join(format!(
+                "rms_export_bundle_test_{}_{}",
+                std::process::id(),
+                unique
+            ))
+            .to_string_lossy()
+            .into_owned()
     }
 
     fn sample_export() -> RmsLinearExport {
@@ -530,5 +604,41 @@ mod tests {
             "unexpected error: {error}"
         );
         let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn write_export_bundle_defaults_to_bin_only() {
+        let stem = temp_export_stem();
+        let report = write_export_bundle(&stem, &sample_export()).expect("写入默认导出失败");
+
+        assert_eq!(report.json_path, None);
+        assert_eq!(report.json_bin_match, None);
+        assert!(Path::new(&report.bin_path).exists());
+        assert!(!Path::new(&format!("{}_c1.json", stem)).exists());
+
+        let _ = fs::remove_file(report.bin_path);
+    }
+
+    #[test]
+    fn write_export_bundle_can_emit_json_when_requested() {
+        let stem = temp_export_stem();
+        let report = write_export_bundle_with_options(
+            &stem,
+            &sample_export(),
+            ExportBundleOptions::with_json(),
+        )
+        .expect("写入带 JSON 的导出失败");
+
+        assert_eq!(report.json_bin_match, Some(true));
+        assert!(Path::new(&report.bin_path).exists());
+        assert!(report
+            .json_path
+            .as_ref()
+            .is_some_and(|path| Path::new(path).exists()));
+
+        if let Some(json_path) = report.json_path {
+            let _ = fs::remove_file(json_path);
+        }
+        let _ = fs::remove_file(report.bin_path);
     }
 }

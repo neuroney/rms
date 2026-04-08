@@ -5,8 +5,8 @@ pub use crate::circom_reader::{
 };
 use crate::evalr1cs::{execute_circuit, verify_assignment, Assignment};
 use crate::export::{
-    load_r1cs_from_json, terms_to_export_string, write_export_bundle, ExportInputConfig,
-    WrittenArtifacts,
+    load_r1cs_from_bin, split_export_cli_args, terms_to_export_string,
+    write_export_bundle_with_options, ExportBundleOptions, ExportInputConfig, WrittenArtifacts,
 };
 use crate::r1cs::{RmsLinearExport, R1CS};
 use crate::transform::{eliminate_common_subexpressions, try_choudhuri_transform, TransformResult};
@@ -269,6 +269,14 @@ pub fn export_circuit(
     generated: &GeneratedCircom,
     transformed: &TransformedCircom,
 ) -> Result<CircomExportReport, Box<dyn Error>> {
+    export_circuit_with_options(generated, transformed, ExportBundleOptions::default())
+}
+
+pub fn export_circuit_with_options(
+    generated: &GeneratedCircom,
+    transformed: &TransformedCircom,
+    export_options: ExportBundleOptions,
+) -> Result<CircomExportReport, Box<dyn Error>> {
     let stem = generated
         .artifacts
         .import_path
@@ -280,7 +288,7 @@ pub fn export_circuit(
     let export = RmsLinearExport::from_r1cs_with_inputs(&transformed.optimized, &input_config)?
         .with_output_witnesses(export_output_witnesses(generated));
 
-    write_export_bundle(&format!("data/{}", stem), &export)
+    write_export_bundle_with_options(&format!("data/{}", stem), &export, export_options)
 }
 
 fn build_export_input_config(
@@ -336,6 +344,10 @@ fn export_output_witnesses(generated: &GeneratedCircom) -> Vec<usize> {
 }
 
 pub fn run(path: &str) {
+    run_with_export_options(path, ExportBundleOptions::default());
+}
+
+fn run_with_export_options(path: &str, export_options: ExportBundleOptions) {
     let generated = generate_circuit(path);
     let transformed = transform_circuit(&generated);
 
@@ -402,21 +414,25 @@ pub fn run(path: &str) {
     }
 
     println!("\n【4. 电路导出】");
-    let export = match export_circuit(&generated, &transformed) {
+    let export = match export_circuit_with_options(&generated, &transformed, export_options) {
         Ok(export) => export,
         Err(err) => {
             println!("  导出失败: {}", err);
             return;
         }
     };
-    println!("  JSON: {}", export.json_path);
     println!("  BIN:  {}", export.bin_path);
+    if let Some(json_path) = &export.json_path {
+        println!("  JSON: {}", json_path);
+    }
     println!("  版本: {}", export.version);
     println!("  约束数: {}", export.num_constraints);
-    println!("  JSON/BIN 内容一致: {}", export.json_bin_match);
+    if let Some(json_bin_match) = export.json_bin_match {
+        println!("  JSON/BIN 内容一致: {}", json_bin_match);
+    }
     println!("  前 5 条最终 RMS 约束:");
-    let exported_json = load_r1cs_from_json(&export.json_path).expect("读取 JSON 导出文件失败");
-    for constraint in exported_json.constraints.iter().take(5) {
+    let exported_bin = load_r1cs_from_bin(&export.bin_path).expect("读取 BIN 导出文件失败");
+    for constraint in exported_bin.constraints.iter().take(5) {
         println!(
             "    step {:>2}: ({} ) * ({} ) -> w{}",
             constraint.index,
@@ -451,9 +467,10 @@ pub fn run_with_args(args: &[String]) -> Result<(), String> {
         return Err(usage_text().to_string());
     }
 
-    match args {
+    let (args, export_options) = split_export_cli_args(args);
+    match args.as_slice() {
         [path] => {
-            run(path);
+            run_with_export_options(path, export_options);
             Ok(())
         }
         _ => Err(usage_text().to_string()),
@@ -463,8 +480,11 @@ pub fn run_with_args(args: &[String]) -> Result<(), String> {
 fn usage_text() -> &'static str {
     "\
 用法:
-  cargo run -- circom <constraints.json|circuit.r1cs|circuit.circom>
-  cargo run --example circom_json -- <constraints.json|circuit.r1cs|circuit.circom>"
+  cargo run -- circom <constraints.json|circuit.r1cs|circuit.circom> [--json]
+  cargo run --example circom_json -- <constraints.json|circuit.r1cs|circuit.circom> [--json]
+
+说明:
+  默认只导出 .bin；追加 --json 时同时导出 .json。"
 }
 
 fn print_generation_summary(generated: &GeneratedCircom) {
