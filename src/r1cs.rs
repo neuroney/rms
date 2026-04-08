@@ -1,3 +1,5 @@
+//! Core R1CS and RMS export data structures plus basic circuit statistics helpers.
+
 use ark_bn254::Fr;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -160,13 +162,13 @@ impl R1CS {
     pub fn print_stats(&self) {
         let total = self.constraints.len();
         if total == 0 {
-            println!("  (空电路)");
+            println!("  (empty circuit)");
             return;
         }
         let ww = self.count_ww_gates();
         let ii = self.count_ii_gates();
         let rms = self.count_rms_gates();
-        println!("  总约束数:        {}", total);
+        println!("  Total constraints: {}", total);
         println!(
             "  RMS-compatible:  {} ({:.1}%)",
             rms,

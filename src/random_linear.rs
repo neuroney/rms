@@ -1,3 +1,5 @@
+//! Random RMS linear-chain generator and export command helpers.
+
 use crate::export::{
     build_rms_export, print_export_constraints_preview, split_export_cli_args,
     write_export_bundle_with_options, ExportBundleOptions, ExportInputConfig,
@@ -133,7 +135,7 @@ pub fn build_random_rms_linear<R: Rng>(
 }
 
 pub fn run() {
-    run_with_args(&[]).expect("随机 linear 示例失败");
+    run_with_args(&[]).expect("Random linear example failed");
 }
 
 pub fn run_with_args(args: &[String]) -> Result<(), String> {
@@ -165,23 +167,23 @@ fn run_with_config(
     let mut rng = StdRng::seed_from_u64(config.seed);
     let export = build_random_rms_linear(config.num_inputs, config.num_constraints, &mut rng)?;
     let report = write_export_bundle_with_options(&config.export_stem, &export, export_options)
-        .map_err(|err| format!("导出随机 linear RMS 电路失败: {err}"))?;
+        .map_err(|err| format!("Failed to export random linear RMS circuit: {err}"))?;
 
     println!("\n╔══════════════════════════════════════════════════╗");
-    println!("║  随机采样 Linear：输入线性组合乘 witness         ║");
+    println!("║  Random Linear: input linear combination times witness ║");
     println!("╚══════════════════════════════════════════════════╝\n");
-    println!("  输入数: {}", export.num_inputs);
-    println!("  约束数: {}", export.constraints.len());
-    println!("  witness 数: {}", export.num_witnesses);
+    println!("  Input count: {}", export.num_inputs);
+    println!("  Constraint count: {}", export.constraints.len());
+    println!("  Witness count: {}", export.num_witnesses);
     println!("  BIN:  {}", report.bin_path);
     if let Some(json_path) = &report.json_path {
         println!("  JSON: {}", json_path);
     }
-    println!("  版本: {}", report.version);
+    println!("  Version: {}", report.version);
     if let Some(json_bin_match) = report.json_bin_match {
-        println!("  JSON/BIN 内容一致: {}", json_bin_match);
+        println!("  JSON/BIN contents match: {}", json_bin_match);
     }
-    println!("  前 8 条 RMS 约束:");
+    println!("  First 8 RMS constraints:");
     print_export_constraints_preview(&export, 8);
 
     Ok(())
@@ -189,19 +191,19 @@ fn run_with_config(
 
 fn parse_usize_arg(name: &str, raw: &str) -> Result<usize, String> {
     raw.parse::<usize>()
-        .map_err(|err| format!("{name} 必须是非负整数，收到 {raw:?}: {err}"))
+        .map_err(|err| format!("{name} must be a non-negative integer, got {raw:?}: {err}"))
 }
 
 fn usage_text() -> &'static str {
     "\
-用法:
+Usage:
   cargo run -- random_linear [--json]
   cargo run -- random_linear <num_inputs> <num_constraints> [--json]
   cargo run --example random_linear -- <num_inputs> <num_constraints> [--json]
 
-说明:
-  默认值: num_inputs=5, num_constraints=64。
-  默认只导出 .bin；追加 --json 时同时导出 .json。"
+Notes:
+    Default: num_inputs=5, num_constraints=64.
+    By default only `.bin` is exported; append `--json` to also emit `.json`."
 }
 
 #[cfg(test)]

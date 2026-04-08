@@ -1,3 +1,5 @@
+//! Shared formatting and preview utilities for circuit/debug output.
+
 use crate::r1cs::{LinComb, Variable, R1CS};
 use ark_bn254::Fr;
 use ark_ff::PrimeField;

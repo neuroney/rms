@@ -1,3 +1,5 @@
+//! Choudhuri transform and common-subexpression elimination for R1CS circuits.
+
 use crate::r1cs::{Constraint, LinComb, Variable, R1CS};
 use crate::utils::{lincomb_to_string, var_to_string};
 use ark_bn254::Fr;

@@ -1,3 +1,5 @@
+//! Public/private database selection demo circuit generation and export pipeline.
+
 use crate::evalr1cs::{execute_circuit, verify_assignment, Assignment};
 use crate::export::{
     load_r1cs_from_bin, split_export_cli_args, terms_to_export_string,
@@ -96,7 +98,7 @@ impl DbSelectRunConfig {
     pub fn for_records(visibility: DatabaseVisibility, num_records: usize) -> Self {
         assert!(
             num_records >= 2 && num_records.is_power_of_two(),
-            "记录条数必须是 >= 2 的 2 的幂"
+            "Number of records must be a power of two and at least 2"
         );
 
         let index_value = num_records / 2 + 1;
@@ -115,7 +117,7 @@ impl DbSelectRunConfig {
 
     pub fn for_exponent(visibility: DatabaseVisibility, exponent: usize) -> Self {
         let num_records =
-            records_from_exponent(exponent).expect("记录条数指数必须能安全转换为 2^x");
+            records_from_exponent(exponent).expect("Record-count exponent must safely convert to 2^x");
         Self::for_records(visibility, num_records)
     }
 }
@@ -279,11 +281,11 @@ pub fn export_circuit_with_options(
 }
 
 pub fn run_public() {
-    run_pub_with_args(&[]).expect("PubDB 示例失败");
+    run_pub_with_args(&[]).expect("PubDB example failed");
 }
 
 pub fn run_private() {
-    run_priv_with_args(&[]).expect("PrivDB 示例失败");
+    run_priv_with_args(&[]).expect("PrivDB example failed");
 }
 
 pub fn run_pub_with_args(args: &[String]) -> Result<(), String> {
@@ -322,7 +324,7 @@ fn run_with_config(
     let export =
         export_circuit_with_options(&generated, &transformed, export_options).map_err(|err| {
             format!(
-                "导出 {} RMS 电路失败: {err}",
+                "Failed to export {} RMS circuit: {err}",
                 generated.config.visibility.label()
             )
         })?;
@@ -331,23 +333,23 @@ fn run_with_config(
     println!(
         "║  {:<46}║",
         format!(
-            "{}：按地址 selector 做数据库选择",
+            "{}: database selection by address selector",
             generated.config.visibility.label()
         )
     );
     println!("╚══════════════════════════════════════════════════╝\n");
 
-    println!("【1. 生成电路】");
-    println!("  模式: {}", generated.config.visibility.label());
-    println!("  记录数 n: {}", generated.config.num_records);
-    println!("  地址位宽: {}", generated.circuit.num_index_bits);
+    println!("[1. Circuit generation]");
+    println!("  Mode: {}", generated.config.visibility.label());
+    println!("  Record count n: {}", generated.config.num_records);
+    println!("  Address bit width: {}", generated.circuit.num_index_bits);
     println!(
-        "  选择索引 i: {} (bits: {})",
+        "  Selected index i: {} (bits: {})",
         generated.config.index_value,
         format_bits_msb(&generated.config.index_bits)
     );
     println!(
-        "  数据库预览: {}",
+        "  Database preview: {}",
         format_preview_list(&generated.config.database_values, 8, coeff_to_string)
     );
     println!(
@@ -365,54 +367,54 @@ fn run_with_config(
         )
     );
     println!(
-        "  输出 witness: w{}",
+        "  Output witness: w{}",
         generated.circuit.output_witness_index
     );
     generated.circuit.r1cs.print_stats();
 
-    println!("\n【2. 电路转换】");
+    println!("\n[2. Circuit transformation]");
     transformed.transformed.r1cs.print_stats();
     println!(
-        "  Choudhuri 膨胀倍数: {:.2}x",
+        "  Choudhuri blowup factor: {:.2}x",
         transformed.transformed.blowup_factor
     );
-    println!("  CSE 消除重复约束:  {}", transformed.eliminated);
+    println!("  CSE eliminated duplicate constraints: {}", transformed.eliminated);
     println!(
-        "  最终膨胀倍数:      {:.2}x",
+        "  Final blowup factor: {:.2}x",
         transformed.optimized.constraints.len() as f64
             / generated.circuit.r1cs.constraints.len() as f64
     );
 
-    println!("\n【3. Eval 一致性】");
+    println!("\n[3. Eval consistency]");
     println!(
-        "  期望输出:       {}",
+        "  Expected output: {}",
         coeff_to_string(&evaluation.expected_output)
     );
     println!(
-        "  原始电路输出:   {}",
+        "  Original circuit output: {}",
         coeff_to_string(&evaluation.original_output)
     );
     println!(
-        "  转换后电路输出: {}",
+        "  Transformed circuit output: {}",
         coeff_to_string(&evaluation.transformed_output)
     );
     println!(
-        "  输出一致: {}  [约束满足: orig={}, rms+cse={}]",
+        "  Outputs match: {}  [constraints satisfied: orig={}, rms+cse={}]",
         evaluation.outputs_match, evaluation.original_valid, evaluation.transformed_valid
     );
 
-    println!("\n【4. 电路导出】");
+    println!("\n[4. Circuit export]");
     println!("  BIN:  {}", export.bin_path);
     if let Some(json_path) = &export.json_path {
         println!("  JSON: {}", json_path);
     }
-    println!("  版本: {}", export.version);
-    println!("  约束数: {}", export.num_constraints);
+    println!("  Version: {}", export.version);
+    println!("  Constraints: {}", export.num_constraints);
     if let Some(json_bin_match) = export.json_bin_match {
-        println!("  JSON/BIN 内容一致: {}", json_bin_match);
+        println!("  JSON/BIN contents match: {}", json_bin_match);
     }
-    println!("  前 8 条最终 RMS 约束:");
-    let exported_bin = load_r1cs_from_bin(&export.bin_path).expect("读取 BIN 导出文件失败");
+    println!("  First 8 final RMS constraints:");
+    let exported_bin = load_r1cs_from_bin(&export.bin_path).expect("Failed to read BIN export file");
     for constraint in exported_bin.constraints.iter().take(8) {
         println!(
             "    step {:>2}: ({} ) * ({} ) -> w{}",
@@ -423,7 +425,7 @@ fn run_with_config(
         );
     }
 
-    println!("\n【前 8 条原始约束预览】");
+    println!("\n[Preview of the first 8 original constraints]");
     let original_preview = R1CS {
         num_inputs: generated.circuit.r1cs.num_inputs,
         num_witnesses: generated.circuit.r1cs.num_witnesses,
@@ -447,7 +449,7 @@ fn validate_num_records(num_records: usize) -> Result<(), String> {
         return Err("num_records must be >= 2".to_string());
     }
     if !num_records.is_power_of_two() {
-        return Err(format!("num_records={num_records} 必须是 2 的幂"));
+        return Err(format!("num_records={num_records} must be a power of two"));
     }
     Ok(())
 }
@@ -458,20 +460,20 @@ fn validate_config(config: &DbSelectRunConfig) -> Result<(), String> {
     let num_bits = num_index_bits(config.num_records);
     if config.index_value >= config.num_records {
         return Err(format!(
-            "index_value={} 超出地址范围 [0, {})",
+            "index_value={} exceeds address range [0, {})",
             config.index_value, config.num_records
         ));
     }
     if config.index_bits.len() != num_bits {
         return Err(format!(
-            "index_bits 长度应为 {}，实际 {}",
+            "index_bits length should be {}, got {}",
             num_bits,
             config.index_bits.len()
         ));
     }
     if config.database_values.len() != config.num_records {
         return Err(format!(
-            "database_values 长度应为 {}，实际 {}",
+            "database_values length should be {}, got {}",
             config.num_records,
             config.database_values.len()
         ));
@@ -483,14 +485,14 @@ fn validate_config(config: &DbSelectRunConfig) -> Result<(), String> {
         .find(|(_, value)| **value > 1)
     {
         return Err(format!(
-            "index_bits[{bit_idx}] = {value} 不是有效 bit（必须是 0 或 1）"
+            "index_bits[{bit_idx}] = {value} is not a valid bit (must be 0 or 1)"
         ));
     }
 
     let decoded = bits_to_index_lsb(&config.index_bits);
     if decoded != config.index_value {
         return Err(format!(
-            "index_bits 对应地址 {}，与 index_value={} 不一致",
+            "index_bits decode to address {}, which does not match index_value={}",
             decoded, config.index_value
         ));
     }
@@ -660,38 +662,38 @@ fn format_bits_msb(bits: &[u64]) -> String {
 
 fn parse_usize_arg(name: &str, raw: &str) -> Result<usize, String> {
     raw.parse::<usize>()
-        .map_err(|err| format!("{name} 必须是非负整数，收到 {raw:?}: {err}"))
+        .map_err(|err| format!("{name} must be a non-negative integer, got {raw:?}: {err}"))
 }
 
 fn records_from_exponent(exponent: usize) -> Result<usize, String> {
     let shift =
-        u32::try_from(exponent).map_err(|_| format!("x={exponent} 过大，无法转换为移位位数"))?;
+        u32::try_from(exponent).map_err(|_| format!("x={exponent} is too large to convert to a shift amount"))?;
     1usize
         .checked_shl(shift)
-        .ok_or_else(|| format!("x={exponent} 过大，num_records = 2^x 溢出 usize"))
+        .ok_or_else(|| format!("x={exponent} is too large, num_records = 2^x overflows usize"))
 }
 
 fn usage_text(visibility: DatabaseVisibility) -> &'static str {
     match visibility {
         DatabaseVisibility::Public => {
             "\
-用法:
+Usage:
   cargo run -- pubdb [--json]
   cargo run -- pubdb <x> [--json]
 
-说明:
-  PubDB: 私有地址选择公开数据库，内部地址按 0..n-1 编码，设置 n = 2^x。
-  默认只导出 .bin；追加 --json 时同时导出 .json。"
+Notes:
+    PubDB: private address selection over a public database; internal addresses are encoded as 0..n-1, with n = 2^x.
+    By default only `.bin` is exported; append `--json` to also emit `.json`."
         }
         DatabaseVisibility::Private => {
             "\
-用法:
+Usage:
   cargo run -- privdb [--json]
   cargo run -- privdb <x> [--json]
 
-说明:
-  PrivDB: 私有地址选择私有数据库，内部地址按 0..n-1 编码，设置 n = 2^x。
-  默认只导出 .bin；追加 --json 时同时导出 .json。"
+Notes:
+    PrivDB: private address selection over a private database; internal addresses are encoded as 0..n-1, with n = 2^x.
+    By default only `.bin` is exported; append `--json` to also emit `.json`."
         }
     }
 }

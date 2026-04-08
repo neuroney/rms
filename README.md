@@ -90,10 +90,10 @@ Parameter summary:
 
 - `fixmat`: `dim`
 - `twomat`: `dim`
-- `pubdb`: `x`（0-based 地址，DB 为 public input，设置 `n = 2^x`）
-- `privdb`: `x`（0-based 地址，DB 为 private input，设置 `n = 2^x`）
-- `greater_than`: `bit`（按位生成演示输入，支持任意位宽）
-- `mimc7`: `num_rounds`（使用 fixture 内置的固定 round constants，按 `x <- (x + k_i)^7` 递推，最大 91）
+- `pubdb`: `x` (0-based address, DB is a public input, sets `n = 2^x`)
+- `privdb`: `x` (0-based address, DB is a private input, sets `n = 2^x`)
+- `greater_than`: `bit` (generates demo inputs bit by bit and supports arbitrary bit widths)
+- `mimc7`: `num_rounds` (uses fixture-provided fixed round constants and iterates `x <- (x + k_i)^7`, up to 91 rounds)
 - `page_rank`: `iterations` or `num_vertices iterations`
 - `random_mul`: `num_inputs num_constraints`
 - `random_linear`: `num_inputs num_constraints`

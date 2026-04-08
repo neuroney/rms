@@ -1,3 +1,5 @@
+//! RMS export serialization helpers for JSON/BIN output and input metadata.
+
 use crate::r1cs::{
     ExportConstraint, LinComb, PublicInputValue, RmsLinearExport, Term, Variable, R1CS,
 };
@@ -115,17 +117,17 @@ impl ExportInputConfig {
         for &(index, value) in &self.public_inputs {
             if index >= num_inputs {
                 return Err(format!(
-                    "public input x{} 超出输入范围 [0, {})",
+                    "public input x{} exceeds the input range [0, {})",
                     index, num_inputs
                 ));
             }
             if index == 0 && value != Fr::one() {
-                return Err("x0 必须固定为 1，不能覆写为其他 public value".to_string());
+                return Err("x0 must be fixed to 1 and cannot be overwritten with another public value".to_string());
             }
 
             match public_by_index.insert(index, value) {
                 Some(existing) if existing != value => {
-                    return Err(format!("public input x{} 出现冲突的重复赋值", index));
+                    return Err(format!("public input x{} has conflicting duplicate assignments", index));
                 }
                 _ => {}
             }
@@ -558,9 +560,9 @@ mod tests {
     fn loads_current_json_export() {
         let path = temp_export_path("json");
         let export = sample_export();
-        write_json_pretty_file(&path, &export).expect("写入当前 JSON 导出失败");
+        write_json_pretty_file(&path, &export).expect("Failed to write current JSON export");
 
-        let loaded = load_r1cs_from_json(&path).expect("读取当前 JSON 导出失败");
+        let loaded = load_r1cs_from_json(&path).expect("Failed to read current JSON export");
 
         assert_eq!(loaded, export);
         let _ = fs::remove_file(path);
@@ -570,9 +572,9 @@ mod tests {
     fn loads_current_bin_export() {
         let path = temp_export_path("bin");
         let export = sample_export();
-        write_bin_file(&path, &export).expect("写入当前 BIN 导出失败");
+        write_bin_file(&path, &export).expect("Failed to write current BIN export");
 
-        let loaded = load_r1cs_from_bin(&path).expect("读取当前 BIN 导出失败");
+        let loaded = load_r1cs_from_bin(&path).expect("Failed to read current BIN export");
 
         assert_eq!(loaded, export);
         let _ = fs::remove_file(path);
@@ -595,9 +597,9 @@ mod tests {
     }
   ]
 }"#;
-        fs::write(&path, legacy).expect("写入 legacy JSON 导出失败");
+        fs::write(&path, legacy).expect("Failed to write legacy JSON export");
 
-        let error = load_r1cs_from_json(&path).expect_err("legacy JSON 不应再被接受");
+        let error = load_r1cs_from_json(&path).expect_err("Legacy JSON should no longer be accepted");
 
         assert!(
             error.to_string().contains("missing field"),
@@ -609,7 +611,7 @@ mod tests {
     #[test]
     fn write_export_bundle_defaults_to_bin_only() {
         let stem = temp_export_stem();
-        let report = write_export_bundle(&stem, &sample_export()).expect("写入默认导出失败");
+        let report = write_export_bundle(&stem, &sample_export()).expect("Failed to write default export");
 
         assert_eq!(report.json_path, None);
         assert_eq!(report.json_bin_match, None);
@@ -627,7 +629,7 @@ mod tests {
             &sample_export(),
             ExportBundleOptions::with_json(),
         )
-        .expect("写入带 JSON 的导出失败");
+        .expect("Failed to write export with JSON");
 
         assert_eq!(report.json_bin_match, Some(true));
         assert!(Path::new(&report.bin_path).exists());

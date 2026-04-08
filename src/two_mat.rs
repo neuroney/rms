@@ -1,3 +1,5 @@
+//! Two private matrix multiplication demo circuit and end-to-end export workflow.
+
 use crate::evalr1cs::{execute_circuit, verify_assignment, Assignment};
 use crate::export::{
     load_r1cs_from_bin, split_export_cli_args, terms_to_export_string,
@@ -70,7 +72,7 @@ impl TwoMatRunConfig {
 }
 
 pub fn generate_two_mat_r1cs(dim: usize) -> TwoMatCircuit {
-    assert!(dim > 0, "矩阵维度必须大于 0");
+    assert!(dim > 0, "Matrix dimension must be greater than 0");
 
     let num_inputs = 1 + 2 * dim * dim;
     let mut r1cs = R1CS::new(num_inputs, 0);
@@ -149,8 +151,8 @@ pub fn generate_two_mat_r1cs(dim: usize) -> TwoMatCircuit {
 }
 
 pub fn generate_circuit(config: TwoMatRunConfig) -> GeneratedTwoMat {
-    validate_matrix_shape(&config.left_values, config.dim, config.dim, "左矩阵 M1");
-    validate_matrix_shape(&config.right_values, config.dim, config.dim, "右矩阵 M2");
+    validate_matrix_shape(&config.left_values, config.dim, config.dim, "left matrix M1");
+    validate_matrix_shape(&config.right_values, config.dim, config.dim, "right matrix M2");
 
     let circuit = generate_two_mat_r1cs(config.dim);
     let input_assignment = build_matrix_inputs(
@@ -241,7 +243,7 @@ pub fn export_circuit_with_options(
 }
 
 pub fn run() {
-    run_with_args(&[]).expect("TwoMat 示例失败");
+    run_with_args(&[]).expect("TwoMat example failed");
 }
 
 pub fn run_with_args(args: &[String]) -> Result<(), String> {
@@ -270,64 +272,64 @@ fn run_with_config(
     let transformed = transform_circuit(&generated);
     let evaluation = evaluate_equivalence(&generated, &transformed);
     let export = export_circuit_with_options(&generated, &transformed, export_options)
-        .map_err(|err| format!("导出 TwoMat RMS 电路失败: {err}"))?;
+        .map_err(|err| format!("Failed to export TwoMat RMS circuit: {err}"))?;
 
     println!("\n╔══════════════════════════════════════════════════╗");
-    println!("║  TwoMat：两个私有矩阵相乘                        ║");
+    println!("║  TwoMat: two private matrices multiplication      ║");
     println!("╚══════════════════════════════════════════════════╝\n");
 
-    println!("【1. 生成电路】");
+    println!("[1. Circuit generation]");
     println!(
-        "  维度: {} x {} 乘 {} x {}",
+        "  Dimensions: {} x {} times {} x {}",
         generated.config.dim, generated.config.dim, generated.config.dim, generated.config.dim
     );
-    println!("  私有输入索引:");
+    println!("  Private input indices:");
     print_index_matrix("M1", "x", &generated.circuit.left_input_indices);
     print_index_matrix("M2", "x", &generated.circuit.right_input_indices);
-    println!("  输出 witness:");
+    println!("  Output witnesses:");
     print_index_matrix("P", "w", &generated.circuit.output_witness_indices);
     generated.circuit.r1cs.print_stats();
 
-    println!("\n【2. 电路转换】");
+    println!("\n[2. Circuit transformation]");
     transformed.transformed.r1cs.print_stats();
     println!(
-        "  Choudhuri 膨胀倍数: {:.2}x",
+        "  Choudhuri blowup factor: {:.2}x",
         transformed.transformed.blowup_factor
     );
-    println!("  CSE 消除重复约束:  {}", transformed.eliminated);
+    println!("  CSE eliminated duplicate constraints: {}", transformed.eliminated);
     println!(
-        "  最终膨胀倍数:      {:.2}x",
+        "  Final blowup factor: {:.2}x",
         transformed.optimized.constraints.len() as f64
             / generated.circuit.r1cs.constraints.len() as f64
     );
 
-    println!("\n【3. Eval 一致性】");
-    println!("  私有输入样例:");
+    println!("\n[3. Eval consistency]");
+    println!("  Sample private inputs:");
     print_value_matrix("M1", &generated.config.left_values);
     print_value_matrix("M2", &generated.config.right_values);
-    println!("  期望输出:");
+    println!("  Expected output:");
     print_value_matrix("Expected", &evaluation.expected_output);
-    println!("  原始电路输出:");
+    println!("  Original circuit output:");
     print_value_matrix("R1CS", &evaluation.original_output);
-    println!("  转换后电路输出:");
+    println!("  Transformed circuit output:");
     print_value_matrix("RMS+CSE", &evaluation.transformed_output);
     println!(
-        "  输出一致: {}  [约束满足: orig={}, rms+cse={}]",
+        "  Outputs match: {}  [constraints satisfied: orig={}, rms+cse={}]",
         evaluation.outputs_match, evaluation.original_valid, evaluation.transformed_valid
     );
 
-    println!("\n【4. 电路导出】");
+    println!("\n[4. Circuit export]");
     println!("  BIN:  {}", export.bin_path);
     if let Some(json_path) = &export.json_path {
         println!("  JSON: {}", json_path);
     }
-    println!("  版本: {}", export.version);
-    println!("  约束数: {}", export.num_constraints);
+    println!("  Version: {}", export.version);
+    println!("  Constraints: {}", export.num_constraints);
     if let Some(json_bin_match) = export.json_bin_match {
-        println!("  JSON/BIN 内容一致: {}", json_bin_match);
+        println!("  JSON/BIN contents match: {}", json_bin_match);
     }
-    println!("  前 5 条最终 RMS 约束:");
-    let exported_bin = load_r1cs_from_bin(&export.bin_path).expect("读取 BIN 导出文件失败");
+    println!("  First 5 final RMS constraints:");
+    let exported_bin = load_r1cs_from_bin(&export.bin_path).expect("Failed to read BIN export file");
     for constraint in exported_bin.constraints.iter().take(5) {
         println!(
             "    step {:>2}: ({} ) * ({} ) -> w{}",
@@ -338,7 +340,7 @@ fn run_with_config(
         );
     }
 
-    println!("\n【前 5 条原始约束预览】");
+    println!("\n[Preview of the first 5 original constraints]");
     let original_preview = R1CS {
         num_inputs: generated.circuit.r1cs.num_inputs,
         num_witnesses: generated.circuit.r1cs.num_witnesses,
@@ -403,10 +405,10 @@ fn build_demo_matrix(rows: usize, cols: usize, start: u64) -> Vec<Vec<u64>> {
 }
 
 fn validate_matrix_shape(matrix: &[Vec<u64>], rows: usize, cols: usize, name: &str) {
-    assert_eq!(matrix.len(), rows, "{} 行数不匹配", name);
+    assert_eq!(matrix.len(), rows, "{} row count mismatch", name);
     assert!(
         matrix.iter().all(|row| row.len() == cols),
-        "{} 列数不匹配",
+        "{} column count mismatch",
         name
     );
 }
@@ -417,7 +419,7 @@ fn read_output_matrix(output_witnesses: &[Vec<usize>], assignment: &Assignment) 
         .map(|row| {
             row.iter()
                 .map(|witness_idx| {
-                    fr_to_u64(&assignment.witnesses[witness_idx]).expect("矩阵输出超出 u64")
+                    fr_to_u64(&assignment.witnesses[witness_idx]).expect("Matrix output exceeds u64")
                 })
                 .collect()
         })
@@ -429,8 +431,8 @@ fn multiply_matrices(left: &[Vec<u64>], right: &[Vec<u64>]) -> Vec<Vec<u64>> {
     let shared = left.first().map(|row| row.len()).unwrap_or(0);
     let cols = right.first().map(|row| row.len()).unwrap_or(0);
 
-    assert!(rows > 0 && shared > 0 && cols > 0, "矩阵不能为空");
-    assert_eq!(right.len(), shared, "矩阵维度不匹配");
+    assert!(rows > 0 && shared > 0 && cols > 0, "Matrix cannot be empty");
+    assert_eq!(right.len(), shared, "Matrix dimensions do not match");
 
     let mut result = vec![vec![0u64; cols]; rows];
     for i in 0..rows {
@@ -448,23 +450,23 @@ fn multiply_matrices(left: &[Vec<u64>], right: &[Vec<u64>]) -> Vec<Vec<u64>> {
 fn parse_positive_usize_arg(name: &str, raw: &str) -> Result<usize, String> {
     let value = raw
         .parse::<usize>()
-        .map_err(|err| format!("{name} 必须是非负整数，收到 {raw:?}: {err}"))?;
+        .map_err(|err| format!("{name} must be a non-negative integer, got {raw:?}: {err}"))?;
     if value == 0 {
-        return Err(format!("{name} 必须大于 0"));
+        return Err(format!("{name} must be greater than 0"));
     }
     Ok(value)
 }
 
 fn usage_text() -> &'static str {
     "\
-用法:
+Usage:
   cargo run -- twomat [--json]
   cargo run -- twomat <dim> [--json]
 
-说明:
-  默认值: 4x4 乘 4x4。
-  两个操作数 M1、M2 都是私有 n x n 矩阵输入。
-  默认只导出 .bin；追加 --json 时同时导出 .json。"
+Notes:
+    Default: 4x4 times 4x4.
+    Both operands M1 and M2 are private n x n matrix inputs.
+    By default only `.bin` is exported; append `--json` to also emit `.json`."
 }
 
 #[cfg(test)]
@@ -508,7 +510,7 @@ mod circuit_tests {
             &transformed.optimized,
             &ExportInputConfig::all_private(generated.circuit.r1cs.num_inputs),
         )
-        .expect("导出带输入元数据的 RMS 失败")
+        .expect("Failed to export RMS with input metadata")
         .with_output_witnesses(
             generated
                 .circuit

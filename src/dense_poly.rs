@@ -1,3 +1,5 @@
+//! Dense multivariate polynomial compilation into RMS-compatible constraints.
+
 use crate::export::{
     build_rms_export, print_export_constraints_preview, split_export_cli_args,
     write_export_bundle_with_options, ExportBundleOptions, ExportInputConfig,
@@ -306,7 +308,7 @@ pub fn sample_full_multivariate_poly<R: Rng>(
 }
 
 pub fn run() {
-    run_with_args(&[]).expect("稠密多项式示例失败");
+    run_with_args(&[]).expect("Dense polynomial example failed");
 }
 
 pub fn run_with_args(args: &[String]) -> Result<(), String> {
@@ -337,30 +339,30 @@ fn run_with_config(
 ) -> Result<(), String> {
     let mut rng = StdRng::seed_from_u64(config.seed);
     let poly = sample_full_multivariate_poly(config.num_vars, config.max_degree, &mut rng)
-        .map_err(|err| format!("生成稠密多项式失败: {err}"))?;
+        .map_err(|err| format!("Failed to generate dense polynomial: {err}"))?;
     let coeff_count = poly.terms.len();
     let (export, output_witness) = compile_poly_to_rms_horner(&poly);
     let report = write_export_bundle_with_options(&config.export_stem, &export, export_options)
-        .map_err(|err| format!("导出稠密多项式 RMS 电路失败: {err}"))?;
+        .map_err(|err| format!("Failed to export dense polynomial RMS circuit: {err}"))?;
 
     println!("\n╔══════════════════════════════════════════════════╗");
-    println!("║  稠密多项式：Horner 编译为 RMS 线性电路          ║");
+    println!("║  Dense Polynomial: Horner-compiled to an RMS linear circuit ║");
     println!("╚══════════════════════════════════════════════════╝\n");
-    println!("  变量数: {}", config.num_vars);
-    println!("  最大次数: {}", config.max_degree);
-    println!("  系数数: {}", coeff_count);
-    println!("  输出 witness: w{}", output_witness);
-    println!("  约束数: {}", export.constraints.len());
-    println!("  witness 数: {}", export.num_witnesses);
+    println!("  Variable count: {}", config.num_vars);
+    println!("  Maximum degree: {}", config.max_degree);
+    println!("  Coefficient count: {}", coeff_count);
+    println!("  Output witness: w{}", output_witness);
+    println!("  Constraint count: {}", export.constraints.len());
+    println!("  Witness count: {}", export.num_witnesses);
     println!("  BIN:  {}", report.bin_path);
     if let Some(json_path) = &report.json_path {
         println!("  JSON: {}", json_path);
     }
-    println!("  版本: {}", report.version);
+    println!("  Version: {}", report.version);
     if let Some(json_bin_match) = report.json_bin_match {
-        println!("  JSON/BIN 内容一致: {}", json_bin_match);
+        println!("  JSON/BIN contents match: {}", json_bin_match);
     }
-    println!("  前 8 条 RMS 约束:");
+    println!("  First 8 RMS constraints:");
     print_export_constraints_preview(&export, 8);
 
     Ok(())
@@ -368,19 +370,19 @@ fn run_with_config(
 
 fn parse_usize_arg(name: &str, raw: &str) -> Result<usize, String> {
     raw.parse::<usize>()
-        .map_err(|err| format!("{name} 必须是非负整数，收到 {raw:?}: {err}"))
+        .map_err(|err| format!("{name} must be a non-negative integer, got {raw:?}: {err}"))
 }
 
 fn usage_text() -> &'static str {
     "\
-用法:
+Usage:
   cargo run -- dense_poly [--json]
   cargo run -- dense_poly <num_vars> <degree> [--json]
   cargo run --example dense_poly -- <num_vars> <degree> [--json]
 
-说明:
-  默认值: num_vars=5, degree=4。
-  默认只导出 .bin；追加 --json 时同时导出 .json。"
+Notes:
+    Default: num_vars=5, degree=4.
+    By default only `.bin` is exported; append `--json` to also emit `.json`."
 }
 
 #[cfg(test)]

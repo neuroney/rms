@@ -1,3 +1,5 @@
+//! R1CS assignment execution and constraint satisfaction verification helpers.
+
 use crate::r1cs::{LinComb, Variable, R1CS};
 use crate::utils::coeff_to_string;
 use ark_bn254::Fr;
@@ -25,9 +27,9 @@ impl Assignment {
         for (idx, val) in inputs {
             inp.insert(idx, val);
         }
-        inp.insert(0, Fr::one()); // x0 = 1 default
+        inp.insert(0, Fr::one()); // x0 is always fixed to 1.
         let mut wit = HashMap::new();
-        wit.insert(1, Fr::one()); // w1 = 1 default
+        wit.insert(1, Fr::one()); // w1 is always fixed to 1.
         Assignment {
             inputs: inp,
             witnesses: wit,
@@ -61,11 +63,11 @@ pub fn execute_circuit(r1cs: &R1CS, assignment: &mut Assignment) -> Option<()> {
         match &c.c.terms[..] {
             [(_, Variable::Witness(out_idx))] => {
                 if assignment.witnesses.contains_key(out_idx) {
-                    // 已有值，验证一致性即可
+                    // Existing value; only check consistency.
                     let existing = assignment.witnesses[out_idx];
                     if existing != expected {
                         println!(
-                            "  [错误] 约束 {} 不满足: {} × {} = {} 但 w{} 已有值 {}",
+                            "  [error] Constraint {} is unsatisfied: {} × {} = {} but w{} already has value {}",
                             i,
                             coeff_to_string(&a_val),
                             coeff_to_string(&b_val),
@@ -76,7 +78,7 @@ pub fn execute_circuit(r1cs: &R1CS, assignment: &mut Assignment) -> Option<()> {
                         return None;
                     }
                 } else {
-                    // 新变量，写入
+                    // New variable; store the computed value.
                     assignment.witnesses.insert(*out_idx, expected);
                 }
             }
@@ -84,7 +86,7 @@ pub fn execute_circuit(r1cs: &R1CS, assignment: &mut Assignment) -> Option<()> {
                 let c_val = assignment.eval_lincomb(&c.c)?;
                 if c_val != expected {
                     println!(
-                        "  [错误] 约束 {} 不满足: {} × {} = {} 但期望 {}",
+                        "  [error] Constraint {} is unsatisfied: {} × {} = {} but expected {}",
                         i,
                         coeff_to_string(&a_val),
                         coeff_to_string(&b_val),
@@ -106,7 +108,7 @@ pub fn verify_assignment(r1cs: &R1CS, assignment: &Assignment) -> bool {
         let a_val = match assignment.eval_lincomb(&c.a) {
             Some(v) => v,
             None => {
-                println!("  [错误] 约束 {} 的 A 含未定义变量", i);
+                println!("  [error] Constraint {} has an undefined variable in A", i);
                 all_ok = false;
                 continue;
             }
@@ -114,7 +116,7 @@ pub fn verify_assignment(r1cs: &R1CS, assignment: &Assignment) -> bool {
         let b_val = match assignment.eval_lincomb(&c.b) {
             Some(v) => v,
             None => {
-                println!("  [错误] 约束 {} 的 B 含未定义变量", i);
+                println!("  [error] Constraint {} has an undefined variable in B", i);
                 all_ok = false;
                 continue;
             }
@@ -122,7 +124,7 @@ pub fn verify_assignment(r1cs: &R1CS, assignment: &Assignment) -> bool {
         let c_val = match assignment.eval_lincomb(&c.c) {
             Some(v) => v,
             None => {
-                println!("  [错误] 约束 {} 的 C 含未定义变量", i);
+                println!("  [error] Constraint {} has an undefined variable in C", i);
                 all_ok = false;
                 continue;
             }
@@ -130,7 +132,7 @@ pub fn verify_assignment(r1cs: &R1CS, assignment: &Assignment) -> bool {
 
         if a_val * b_val != c_val {
             println!(
-                "  [错误] 约束 {} 不满足: {} × {} ≠ {}",
+                "  [error] Constraint {} is unsatisfied: {} × {} ≠ {}",
                 i,
                 coeff_to_string(&a_val),
                 coeff_to_string(&b_val),

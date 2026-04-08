@@ -1,3 +1,5 @@
+//! Bitwise greater-than demo circuit construction, evaluation, and export.
+
 use crate::evalr1cs::{execute_circuit, verify_assignment, Assignment};
 use crate::export::{
     load_r1cs_from_bin, split_export_cli_args, terms_to_export_string,
@@ -80,7 +82,7 @@ impl GreaterThanRunConfig {
 }
 
 pub fn generate_greater_than_r1cs(num_bits: usize) -> GreaterThanCircuit {
-    assert!(num_bits > 0, "比较位宽必须大于 0");
+    assert!(num_bits > 0, "Comparison bit width must be greater than 0");
 
     let num_inputs = FIRST_EXTERNAL_INPUT_INDEX + 2 * num_bits;
     let mut r1cs = R1CS::new(num_inputs, 0);
@@ -306,7 +308,7 @@ pub fn export_circuit_with_options(
 }
 
 pub fn run() {
-    run_with_args(&[]).expect("greater-than 示例失败");
+    run_with_args(&[]).expect("greater-than example failed");
 }
 
 pub fn run_with_args(args: &[String]) -> Result<(), String> {
@@ -335,57 +337,57 @@ fn run_with_config(
     let transformed = transform_circuit(&generated);
     let evaluation = evaluate_equivalence(&generated, &transformed);
     let export = export_circuit_with_options(&generated, &transformed, export_options)
-        .map_err(|err| format!("导出 greater-than RMS 电路失败: {err}"))?;
+        .map_err(|err| format!("Failed to export greater-than RMS circuit: {err}"))?;
 
     println!("\n╔══════════════════════════════════════════════════╗");
-    println!("║  Greater-Than 示例：按位递推比较                 ║");
+    println!("║  Greater-Than: bitwise recursive comparison      ║");
     println!("╚══════════════════════════════════════════════════╝\n");
 
-    println!("【1. 生成电路】");
-    println!("  位宽: {}", generated.config.num_bits());
+    println!("[1. Circuit generation]");
+    println!("  Bit width: {}", generated.config.num_bits());
     println!("  alpha = {}", format_operand(&generated.config.alpha_bits));
     println!("  beta  = {}", format_operand(&generated.config.beta_bits));
-    println!("  输入索引（按 MSB -> LSB 展示）:");
+    println!("  Input indices (displayed MSB -> LSB):");
     print_bit_indices("alpha", "x", &generated.circuit.alpha_input_indices);
     print_bit_indices("beta ", "x", &generated.circuit.beta_input_indices);
-    println!("  递推 witness（bit 编号按 MSB -> LSB 展示）:");
+    println!("  Recursive witnesses (bit indices displayed MSB -> LSB):");
     print_comparison_witnesses(&generated.circuit);
     generated.circuit.r1cs.print_stats();
 
-    println!("\n【2. 电路转换】");
+    println!("\n[2. Circuit transformation]");
     transformed.transformed.r1cs.print_stats();
     println!(
-        "  Choudhuri 膨胀倍数: {:.2}x",
+        "  Choudhuri blowup factor: {:.2}x",
         transformed.transformed.blowup_factor
     );
-    println!("  CSE 消除重复约束:  {}", transformed.eliminated);
+    println!("  CSE eliminated duplicate constraints: {}", transformed.eliminated);
     println!(
-        "  最终膨胀倍数:      {:.2}x",
+        "  Final blowup factor: {:.2}x",
         transformed.optimized.constraints.len() as f64
             / generated.circuit.r1cs.constraints.len() as f64
     );
 
-    println!("\n【3. Eval 一致性】");
-    println!("  期望输出:       {}", evaluation.expected_output);
-    println!("  原始电路输出:   {}", evaluation.original_output);
-    println!("  转换后电路输出: {}", evaluation.transformed_output);
+    println!("\n[3. Eval consistency]");
+    println!("  Expected output: {}", evaluation.expected_output);
+    println!("  Original circuit output: {}", evaluation.original_output);
+    println!("  Transformed circuit output: {}", evaluation.transformed_output);
     println!(
-        "  输出一致: {}  [约束满足: orig={}, rms+cse={}]",
+        "  Outputs match: {}  [constraints satisfied: orig={}, rms+cse={}]",
         evaluation.outputs_match, evaluation.original_valid, evaluation.transformed_valid
     );
 
-    println!("\n【4. 电路导出】");
+    println!("\n[4. Circuit export]");
     println!("  BIN:  {}", export.bin_path);
     if let Some(json_path) = &export.json_path {
         println!("  JSON: {}", json_path);
     }
-    println!("  版本: {}", export.version);
-    println!("  约束数: {}", export.num_constraints);
+    println!("  Version: {}", export.version);
+    println!("  Constraints: {}", export.num_constraints);
     if let Some(json_bin_match) = export.json_bin_match {
-        println!("  JSON/BIN 内容一致: {}", json_bin_match);
+        println!("  JSON/BIN contents match: {}", json_bin_match);
     }
-    println!("  前 8 条最终 RMS 约束:");
-    let exported_bin = load_r1cs_from_bin(&export.bin_path).expect("读取 BIN 导出文件失败");
+    println!("  First 8 final RMS constraints:");
+    let exported_bin = load_r1cs_from_bin(&export.bin_path).expect("Failed to read BIN export file");
     for constraint in exported_bin.constraints.iter().take(8) {
         println!(
             "    step {:>2}: ({} ) * ({} ) -> w{}",
@@ -396,7 +398,7 @@ fn run_with_config(
         );
     }
 
-    println!("\n【前 8 条原始约束预览】");
+    println!("\n[Preview of the first 8 original constraints]");
     let original_preview = R1CS {
         num_inputs: generated.circuit.r1cs.num_inputs,
         num_witnesses: generated.circuit.r1cs.num_witnesses,
@@ -417,11 +419,11 @@ fn run_with_config(
 
 fn validate_config(config: &GreaterThanRunConfig) {
     let num_bits = config.num_bits();
-    assert!(num_bits > 0, "比较位宽必须大于 0");
+    assert!(num_bits > 0, "Comparison bit width must be greater than 0");
     assert_eq!(
         num_bits,
         config.beta_bits.len(),
-        "alpha_bits 和 beta_bits 的长度必须一致"
+        "alpha_bits and beta_bits must have the same length"
     );
 
     validate_binary_operand("alpha_bits", &config.alpha_bits);
@@ -430,12 +432,12 @@ fn validate_config(config: &GreaterThanRunConfig) {
 
 fn validate_binary_operand(name: &str, bits: &[u64]) {
     if let Some((bit_idx, value)) = bits.iter().enumerate().find(|(_, bit)| **bit > 1) {
-        panic!("{name}[{bit_idx}] = {value} 不是有效 bit（必须是 0 或 1）");
+        panic!("{name}[{bit_idx}] = {value} is not a valid bit (must be 0 or 1)");
     }
 }
 
 fn demo_operands(num_bits: usize) -> (Vec<u64>, Vec<u64>) {
-    assert!(num_bits > 0, "比较位宽必须大于 0");
+    assert!(num_bits > 0, "Comparison bit width must be greater than 0");
 
     if num_bits == 1 {
         return (vec![1], vec![0]);
@@ -466,7 +468,7 @@ fn bits_greater_than(alpha_bits: &[u64], beta_bits: &[u64]) -> bool {
     assert_eq!(
         alpha_bits.len(),
         beta_bits.len(),
-        "alpha_bits 和 beta_bits 的长度必须一致"
+        "alpha_bits and beta_bits must have the same length"
     );
 
     alpha_bits
@@ -486,12 +488,12 @@ fn build_bit_inputs(
     assert_eq!(
         alpha_indices.len(),
         alpha_bits.len(),
-        "alpha 输入索引数量必须与 alpha_bits 长度一致"
+        "alpha input indices must match alpha_bits length"
     );
     assert_eq!(
         beta_indices.len(),
         beta_bits.len(),
-        "beta 输入索引数量必须与 beta_bits 长度一致"
+        "beta input indices must match beta_bits length"
     );
 
     let mut inputs = Vec::with_capacity(alpha_indices.len() + beta_indices.len() + 1);
@@ -516,7 +518,7 @@ fn greater_than_export_input_config(num_inputs: usize) -> ExportInputConfig {
 }
 
 fn read_output(output_witness: usize, assignment: &Assignment) -> u64 {
-    fr_to_u64(&assignment.witnesses[&output_witness]).expect("比较输出超出 u64")
+    fr_to_u64(&assignment.witnesses[&output_witness]).expect("Comparison output exceeds u64")
 }
 
 fn format_operand(bits: &[u64]) -> String {
@@ -589,24 +591,24 @@ fn print_comparison_witnesses(circuit: &GreaterThanCircuit) {
 fn parse_positive_usize_arg(name: &str, raw: &str) -> Result<usize, String> {
     let value = raw
         .parse::<usize>()
-        .map_err(|err| format!("{name} 必须是非负整数，收到 {raw:?}: {err}"))?;
+        .map_err(|err| format!("{name} must be a non-negative integer, got {raw:?}: {err}"))?;
     if value == 0 {
-        return Err(format!("{name} 必须大于 0"));
+        return Err(format!("{name} must be greater than 0"));
     }
     Ok(value)
 }
 
 fn usage_text() -> &'static str {
     "\
-用法:
+Usage:
   cargo run -- greater_than [--json]
   cargo run -- greater_than <bit> [--json]
   cargo run --example greater_than -- <bit> [--json]
 
-说明:
-  默认值: bit=8。
-  alpha 和 beta 会根据位宽自动生成一组稳定的按位演示输入，支持任意位宽。
-  默认只导出 .bin；追加 --json 时同时导出 .json。"
+Notes:
+    Default: bit=8.
+    alpha and beta are generated as a stable bitwise demo input set based on the chosen bit width, and arbitrary widths are supported.
+    By default only `.bin` is exported; append `--json` to also emit `.json`."
 }
 
 #[cfg(test)]
@@ -619,8 +621,8 @@ mod circuit_tests {
         alpha_bits: &[u64],
         beta_bits: &[u64],
     ) -> Assignment {
-        assert_eq!(circuit.num_bits, alpha_bits.len(), "alpha_bits 长度不匹配");
-        assert_eq!(circuit.num_bits, beta_bits.len(), "beta_bits 长度不匹配");
+        assert_eq!(circuit.num_bits, alpha_bits.len(), "alpha_bits length mismatch");
+        assert_eq!(circuit.num_bits, beta_bits.len(), "beta_bits length mismatch");
 
         Assignment::new(build_bit_inputs(
             &circuit.alpha_input_indices,
@@ -631,7 +633,7 @@ mod circuit_tests {
     }
 
     fn read_greater_than_output(circuit: &GreaterThanCircuit, assignment: &Assignment) -> u64 {
-        fr_to_u64(&assignment.witnesses[&circuit.output_witness_index]).expect("比较输出超出 u64")
+        fr_to_u64(&assignment.witnesses[&circuit.output_witness_index]).expect("Comparison output exceeds u64")
     }
 
     fn bits_from_msb_string(bits: &str) -> Vec<u64> {
@@ -640,7 +642,7 @@ mod circuit_tests {
             .map(|ch| match ch {
                 '0' => 0,
                 '1' => 1,
-                other => panic!("非法 bit 字符: {other}"),
+                other => panic!("Invalid bit character: {other}"),
             })
             .collect()
     }

@@ -1,3 +1,5 @@
+//! Public Circom workflow orchestration: import, transform, evaluate, and export.
+
 pub use crate::circom_reader::{
     default_sym_path_for_r1cs, import_circom_constraints_json, import_circom_file,
     import_circom_r1cs, load_circom_sym, optimize_circom_r1cs, CircomImportFormat, CircomSymEntry,
@@ -75,10 +77,10 @@ struct ExternalCommand {
 }
 
 pub fn generate_circuit(path: &str) -> GeneratedCircom {
-    let artifacts = resolve_artifacts(Path::new(path)).expect("解析 Circom 工件失败");
+    let artifacts = resolve_artifacts(Path::new(path)).expect("Failed to resolve Circom artifacts");
     let import_path = artifacts.import_path.clone();
     let (imported, format) = run_on_large_stack("circom-import", move || {
-        import_circom_file(&import_path).expect("导入 Circom 文件失败")
+        import_circom_file(&import_path).expect("Failed to import Circom file")
     });
     let symbols = artifacts
         .sym_path
@@ -122,7 +124,7 @@ pub fn evaluate_equivalence(
             return CircomEvalReport {
                 attempted: false,
                 skipped_reason: Some(format!(
-                    "{}，跳过真实 witness 对拍",
+                    "{}, skipping real witness comparison",
                     reference_witness_unavailable_reason(generated)
                 )),
                 original_valid: false,
@@ -138,7 +140,7 @@ pub fn evaluate_equivalence(
         Err(err) => {
             return CircomEvalReport {
                 attempted: false,
-                skipped_reason: Some(format!("生成/读取 witness 失败: {}", err)),
+                skipped_reason: Some(format!("Failed to generate/read witness: {}", err)),
                 original_valid: false,
                 transformed_valid: false,
                 outputs_match: false,
@@ -160,7 +162,7 @@ pub fn evaluate_equivalence(
             let value = *witness_values
                 .values
                 .get(*signal_id)
-                .ok_or_else(|| format!("witness 中缺少 signal {}", signal_id))?;
+                .ok_or_else(|| format!("witness is missing signal {}", signal_id))?;
             Ok((input_idx, value))
         })
         .collect::<Result<Vec<_>, Box<dyn Error>>>();
@@ -170,7 +172,7 @@ pub fn evaluate_equivalence(
         Err(err) => {
             return CircomEvalReport {
                 attempted: false,
-                skipped_reason: Some(format!("从 witness 提取输入失败: {}", err)),
+                skipped_reason: Some(format!("Failed to extract inputs from witness: {}", err)),
                 original_valid: false,
                 transformed_valid: false,
                 outputs_match: false,
@@ -282,7 +284,7 @@ pub fn export_circuit_with_options(
         .import_path
         .file_stem()
         .and_then(|stem| stem.to_str())
-        .ok_or("Circom 路径没有可用文件名")?;
+        .ok_or("Circom path does not have a usable file name")?;
 
     let input_config = build_export_input_config(generated)?;
     let export = RmsLinearExport::from_r1cs_with_inputs(&transformed.optimized, &input_config)?
@@ -301,7 +303,7 @@ fn build_export_input_config(
 
     let witness_values = load_reference_witness(generated)?.ok_or_else(|| {
         format!(
-            "rms-linear-v2 导出需要 public input 的具体值；{}，无法生成 reference witness",
+            "rms-linear-v2 export requires concrete public input values; {}, unable to generate reference witness",
             reference_witness_unavailable_reason(generated)
         )
     })?;
@@ -316,7 +318,7 @@ fn build_export_input_config(
             let value = *witness_values
                 .values
                 .get(*signal_id)
-                .ok_or_else(|| format!("witness 中缺少 public input signal {}", signal_id))?;
+                .ok_or_else(|| format!("witness is missing public input signal {}", signal_id))?;
             Ok((input_idx, value))
         })
         .collect::<Result<Vec<_>, Box<dyn Error>>>()?;
@@ -355,69 +357,69 @@ fn run_with_export_options(path: &str, export_options: ExportBundleOptions) {
     println!("║  Circom -> RMS                                  ║");
     println!("╚══════════════════════════════════════════════════╝\n");
 
-    println!("【1. 读取真实工件】");
+    println!("[1. Read real artifacts]");
     print_generation_summary(&generated);
 
     let transformed = match transformed {
         Ok(transformed) => transformed,
         Err(err) => {
-            println!("\n【2. 电路转换】");
-            println!("  转换失败: {}", err);
+            println!("\n[2. Circuit transformation]");
+            println!("  Transformation failed: {}", err);
             return;
         }
     };
     let evaluation = evaluate_equivalence(&generated, &transformed);
 
-    println!("\n【2. 电路转换】");
+    println!("\n[2. Circuit transformation]");
     transformed.transformed.r1cs.print_stats();
     println!(
-        "  Choudhuri 膨胀倍数: {:.2}x",
+        "  Choudhuri blowup factor: {:.2}x",
         transformed.transformed.blowup_factor
     );
-    println!("  CSE 消除重复约束:  {}", transformed.eliminated);
+    println!("  CSE eliminated duplicate constraints: {}", transformed.eliminated);
     println!(
-        "  最终膨胀倍数:      {:.2}x",
+        "  Final blowup factor: {:.2}x",
         transformed.optimized.constraints.len() as f64
             / generated.imported.normalized_r1cs.constraints.len() as f64
     );
 
-    println!("\n【3. Eval 一致性】");
+    println!("\n[3. Eval consistency]");
     if evaluation.attempted {
         if let Some(source) = &evaluation.witness_source {
-            println!("  witness 来源: {}", source);
+            println!("  Witness source: {}", source);
         }
-        println!("  输入值:");
+        println!("  Input values:");
         for value in evaluation.input_values.iter().take(8) {
             println!("    {}", format_signal_value(value));
         }
-        println!("  原始 witness 输出:");
+        println!("  Original witness outputs:");
         for value in &evaluation.expected_outputs {
             println!("    {}", format_signal_value(value));
         }
-        println!("  导入后原始电路输出:");
+        println!("  Imported original circuit outputs:");
         for value in &evaluation.original_outputs {
             println!("    {}", format_signal_value(value));
         }
-        println!("  转换后 RMS 输出:");
+        println!("  Transformed RMS outputs:");
         for value in &evaluation.transformed_outputs {
             println!("    {}", format_signal_value(value));
         }
         println!(
-            "  输出一致: {}  [约束满足: orig={}, rms+cse={}]",
+            "  Outputs match: {}  [constraints satisfied: orig={}, rms+cse={}]",
             evaluation.outputs_match, evaluation.original_valid, evaluation.transformed_valid
         );
     } else {
         println!(
-            "  跳过 eval: {}",
-            evaluation.skipped_reason.as_deref().unwrap_or("未知原因")
+            "  Skipping eval: {}",
+            evaluation.skipped_reason.as_deref().unwrap_or("unknown reason")
         );
     }
 
-    println!("\n【4. 电路导出】");
+    println!("\n[4. Circuit export]");
     let export = match export_circuit_with_options(&generated, &transformed, export_options) {
         Ok(export) => export,
         Err(err) => {
-            println!("  导出失败: {}", err);
+            println!("  Export failed: {}", err);
             return;
         }
     };
@@ -425,13 +427,13 @@ fn run_with_export_options(path: &str, export_options: ExportBundleOptions) {
     if let Some(json_path) = &export.json_path {
         println!("  JSON: {}", json_path);
     }
-    println!("  版本: {}", export.version);
-    println!("  约束数: {}", export.num_constraints);
+    println!("  Version: {}", export.version);
+    println!("  Constraints: {}", export.num_constraints);
     if let Some(json_bin_match) = export.json_bin_match {
-        println!("  JSON/BIN 内容一致: {}", json_bin_match);
+        println!("  JSON/BIN contents match: {}", json_bin_match);
     }
-    println!("  前 5 条最终 RMS 约束:");
-    let exported_bin = load_r1cs_from_bin(&export.bin_path).expect("读取 BIN 导出文件失败");
+    println!("  First 5 final RMS constraints:");
+    let exported_bin = load_r1cs_from_bin(&export.bin_path).expect("Failed to read BIN export file");
     for constraint in exported_bin.constraints.iter().take(5) {
         println!(
             "    step {:>2}: ({} ) * ({} ) -> w{}",
@@ -442,7 +444,7 @@ fn run_with_export_options(path: &str, export_options: ExportBundleOptions) {
         );
     }
 
-    println!("\n【前 5 条规范化约束预览】");
+    println!("\n[Preview of the first 5 normalized constraints]");
     let preview = R1CS {
         num_inputs: generated.imported.normalized_r1cs.num_inputs,
         num_witnesses: generated.imported.normalized_r1cs.num_witnesses,
@@ -478,32 +480,32 @@ pub fn run_with_args(args: &[String]) -> Result<(), String> {
 }
 
 fn usage_text() -> &'static str {
-    "\
-用法:
+        "\
+Usage:
   cargo run -- circom <constraints.json|circuit.r1cs|circuit.circom> [--json]
   cargo run --example circom_json -- <constraints.json|circuit.r1cs|circuit.circom> [--json]
 
-说明:
-  默认只导出 .bin；追加 --json 时同时导出 .json。"
+Notes:
+    By default only `.bin` is exported; append `--json` to also emit `.json`."
 }
 
 fn print_generation_summary(generated: &GeneratedCircom) {
-    println!("  用户输入: {}", generated.artifacts.user_path.display());
-    println!("  实际导入: {}", generated.artifacts.import_path.display());
-    println!("  格式: {}", generated.artifacts.format.display_name());
+        println!("  User input: {}", generated.artifacts.user_path.display());
+        println!("  Imported path: {}", generated.artifacts.import_path.display());
+        println!("  Format: {}", generated.artifacts.format.display_name());
     if let Some(source_path) = &generated.artifacts.source_path {
-        println!("  源码: {}", source_path.display());
+        println!("  Source: {}", source_path.display());
     }
     println!(
-        "  来自源码编译: {}",
+        "  Compiled from source: {}",
         generated.artifacts.compiled_from_source
     );
     println!(
-        "  原始 Circom 约束数: {}",
+        "  Original Circom constraint count: {}",
         generated.imported.original_constraints
     );
     println!(
-        "  公开输出 / 公开输入 / 私有输入: {} / {} / {}",
+        "  Public outputs / public inputs / private inputs: {} / {} / {}",
         generated.imported.layout.public_output_signal_ids.len(),
         generated.imported.layout.public_input_signal_ids.len(),
         generated.imported.layout.private_input_signal_ids.len()
@@ -511,7 +513,7 @@ fn print_generation_summary(generated: &GeneratedCircom) {
     if let Some(sym_path) = &generated.artifacts.sym_path {
         println!("  .sym: {}", sym_path.display());
     } else {
-        println!("  .sym: 未找到");
+        println!("  .sym: not found");
     }
     if let Some(wasm_path) = &generated.artifacts.wasm_path {
         println!("  .wasm: {}", wasm_path.display());
@@ -520,9 +522,9 @@ fn print_generation_summary(generated: &GeneratedCircom) {
         println!("  input.json: {}", input_json_path.display());
     }
     if let Some(symbols) = &generated.symbols {
-        println!("  符号表条目数: {}", symbols.entries.len());
+        println!("  Symbol table entries: {}", symbols.entries.len());
     }
-    println!("  外部输入 signal:");
+    println!("  External input signals:");
     for signal_id in &generated.imported.input_signal_ids {
         println!(
             "    signal {} -> x{}{}",
@@ -537,7 +539,7 @@ fn print_generation_summary(generated: &GeneratedCircom) {
         .public_output_signal_ids
         .is_empty()
     {
-        println!("  公开输出 signal:");
+        println!("  Public output signals:");
         for signal_id in &generated.imported.layout.public_output_signal_ids {
             println!(
                 "    signal {}{}",
@@ -554,13 +556,13 @@ fn resolve_artifacts(user_path: &Path) -> Result<CircomRunArtifacts, Box<dyn Err
     let extension = user_path
         .extension()
         .and_then(|ext| ext.to_str())
-        .ok_or("Circom 路径缺少扩展名")?;
+        .ok_or("Circom path is missing an extension")?;
 
     match extension {
         "json" | "r1cs" => build_artifacts_from_compiled_path(user_path, false),
         "circom" => resolve_from_source(user_path),
         _ => Err(format!(
-            "不支持的 Circom 输入格式: {}。目前支持 .circom / .r1cs / .json",
+            "Unsupported Circom input format: {}. Supported formats are .circom / .r1cs / .json",
             user_path.display()
         )
         .into()),
@@ -585,7 +587,7 @@ fn resolve_from_source(source_path: PathBuf) -> Result<CircomRunArtifacts, Box<d
     let stem = source_path
         .file_stem()
         .and_then(|stem| stem.to_str())
-        .ok_or("源码路径没有可用文件名")?;
+        .ok_or("Source path does not have a usable file name")?;
     let build_dir = PathBuf::from(format!("target/circom_build/{}", stem));
     fs::create_dir_all(&build_dir)?;
 
@@ -598,7 +600,7 @@ fn resolve_from_source(source_path: PathBuf) -> Result<CircomRunArtifacts, Box<d
         .arg("node_modules")
         .status()?;
     if !status.success() {
-        return Err(format!("circom 编译失败: {}", source_path.display()).into());
+        return Err(format!("circom compilation failed: {}", source_path.display()).into());
     }
 
     let compiled_r1cs = build_dir.join(format!("{}.r1cs", stem));
@@ -619,13 +621,13 @@ fn build_artifacts_from_compiled_path(
     let format = match import_path.extension().and_then(|ext| ext.to_str()) {
         Some("json") => CircomImportFormat::ConstraintsJson,
         Some("r1cs") => CircomImportFormat::BinaryR1cs,
-        _ => return Err(format!("无法识别导入文件格式: {}", import_path.display()).into()),
+        _ => return Err(format!("Could not recognize import file format: {}", import_path.display()).into()),
     };
 
     let stem = import_path
         .file_stem()
         .and_then(|stem| stem.to_str())
-        .ok_or("导入路径没有可用文件名")?;
+        .ok_or("Import path does not have a usable file name")?;
     let parent = import_path
         .parent()
         .map(Path::to_path_buf)
@@ -700,7 +702,7 @@ fn load_reference_witness(
         .import_path
         .file_stem()
         .and_then(|stem| stem.to_str())
-        .ok_or("Circom 路径没有可用文件名")?;
+        .ok_or("Circom path does not have a usable file name")?;
     let wtns_path = PathBuf::from(format!("target/{}_reference.wtns", stem));
     let wtns_json_path = PathBuf::from(format!("target/{}_reference_wtns.json", stem));
 
@@ -736,7 +738,7 @@ fn parse_witness_json(path: &Path) -> Result<Vec<Fr>, Box<dyn Error>> {
     strings
         .into_iter()
         .map(|value| {
-            Fr::from_str(&value).map_err(|_| format!("无法解析 witness 值: {}", value).into())
+            Fr::from_str(&value).map_err(|_| format!("Failed to parse witness value: {}", value).into())
         })
         .collect()
 }
@@ -762,7 +764,7 @@ fn find_snarkjs_command() -> Result<ExternalCommand, Box<dyn Error>> {
         });
     }
 
-    Err("未找到 snarkjs，可用路径应为 node_modules/.bin/snarkjs / snarkjs / npx snarkjs".into())
+    Err("snarkjs was not found; expected one of node_modules/.bin/snarkjs / snarkjs / npx snarkjs".into())
 }
 
 fn find_circom_command() -> Result<ExternalCommand, Box<dyn Error>> {
@@ -786,7 +788,7 @@ fn find_circom_command() -> Result<ExternalCommand, Box<dyn Error>> {
         });
     }
 
-    Err("未找到 circom 编译器，可用路径应为 node_modules/.bin/circom2 / circom / circom2".into())
+    Err("circom compiler was not found; expected one of node_modules/.bin/circom2 / circom / circom2".into())
 }
 
 fn run_snarkjs(command: &ExternalCommand, args: &[&str]) -> Result<(), Box<dyn Error>> {
@@ -796,7 +798,7 @@ fn run_snarkjs(command: &ExternalCommand, args: &[&str]) -> Result<(), Box<dyn E
         .status()?;
     if !status.success() {
         return Err(format!(
-            "snarkjs 命令失败: {} {}",
+            "snarkjs command failed: {} {}",
             command.program.display(),
             args.join(" ")
         )
@@ -827,7 +829,7 @@ fn discover_source_input_json(source_path: &Path) -> Option<PathBuf> {
 
 fn reference_witness_unavailable_reason(generated: &GeneratedCircom) -> String {
     if generated.artifacts.format != CircomImportFormat::BinaryR1cs {
-        return "导入格式不是 binary .r1cs，无法使用 snarkjs 生成 reference witness".to_string();
+        return "The import format is not binary .r1cs, so snarkjs cannot generate a reference witness".to_string();
     }
 
     let mut missing = Vec::new();
@@ -839,9 +841,9 @@ fn reference_witness_unavailable_reason(generated: &GeneratedCircom) -> String {
     }
 
     if missing.is_empty() {
-        "缺少可用 reference witness 依赖".to_string()
+        "Missing available reference witness dependencies".to_string()
     } else {
-        format!("缺少可用的 {}", missing.join(" + "))
+        format!("Missing available {}", missing.join(" + "))
     }
 }
 
@@ -888,9 +890,9 @@ where
         .name(name.to_string())
         .stack_size(256 * 1024 * 1024)
         .spawn(job)
-        .expect("创建大栈线程失败")
+        .expect("Failed to create large-stack thread")
         .join()
-        .expect("大栈线程执行失败")
+        .expect("Large-stack thread execution failed")
 }
 
 #[cfg(test)]
@@ -901,9 +903,9 @@ mod tests {
     fn parses_basic_sym_file() {
         let path = std::env::temp_dir().join(format!("rms_sym_test_{}.sym", std::process::id()));
         fs::write(&path, "1,1,0,main.out\n2,2,0,main.a\n3,-1,0,main.dead\n")
-            .expect("写入 .sym fixture 失败");
+            .expect("Failed to write .sym fixture");
 
-        let symbols = load_circom_sym(&path).expect("解析 .sym 失败");
+        let symbols = load_circom_sym(&path).expect("Failed to parse .sym");
         assert_eq!(symbols.entries.len(), 3);
         assert_eq!(
             symbols.witness_names.get(&1).map(String::as_str),
