@@ -349,7 +349,7 @@ fn run_with_config(
         generated.circuit.lifted_input_witness
     );
     println!(
-        "  Per-round output witnesse",
+        "  Per-round output witnesses: {}",
         generated.circuit.round_output_witness_indices.last().unwrap()
     );
     generated.circuit.r1cs.print_stats();
