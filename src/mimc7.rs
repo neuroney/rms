@@ -1,3 +1,5 @@
+//! Hand-written recursive MiMC7 demo circuit and RMS export pipeline.
+
 use crate::evalr1cs::{execute_circuit, verify_assignment, Assignment};
 use crate::export::{
     load_r1cs_from_bin, split_export_cli_args, terms_to_export_string,
@@ -84,12 +86,12 @@ pub fn available_round_constants() -> Result<Vec<Fr>, String> {
     let marker = "var c[91] = [";
     let start = MIMC7_FIXTURE_SOURCE
         .find(marker)
-        .ok_or_else(|| "在 fixture 里找不到 MiMC7 round constants 定义".to_string())?
+        .ok_or_else(|| "Could not find the MiMC7 round constants definition in the fixture".to_string())?
         + marker.len();
     let tail = &MIMC7_FIXTURE_SOURCE[start..];
     let end = tail
         .find("];")
-        .ok_or_else(|| "MiMC7 round constants 定义缺少结束标记 `];`".to_string())?;
+        .ok_or_else(|| "MiMC7 round constants definition is missing the closing `];`".to_string())?;
     let body = &tail[..end];
 
     let constants = body
@@ -101,7 +103,7 @@ pub fn available_round_constants() -> Result<Vec<Fr>, String> {
 
     if constants.len() != DEFAULT_NUM_ROUNDS {
         return Err(format!(
-            "MiMC7 fixture round constants 数量异常: 期望 {}，实际 {}",
+            "MiMC7 fixture round constants count is inconsistent: expected {}, got {}",
             DEFAULT_NUM_ROUNDS,
             constants.len()
         ));
@@ -300,7 +302,7 @@ pub fn expected_round_outputs(num_rounds: usize, input_value: Fr) -> Result<Vec<
 }
 
 pub fn run() {
-    run_with_args(&[]).expect("MiMC7 示例失败");
+    run_with_args(&[]).expect("MiMC7 example failed");
 }
 
 pub fn run_with_args(args: &[String]) -> Result<(), String> {
@@ -329,75 +331,75 @@ fn run_with_config(
     let transformed = transform_circuit(&generated);
     let evaluation = evaluate_equivalence(&generated, &transformed);
     let export = export_circuit_with_options(&generated, &transformed, export_options)
-        .map_err(|err| format!("导出 MiMC7 RMS 电路失败: {err}"))?;
+        .map_err(|err| format!("Failed to export MiMC7 RMS circuit: {err}"))?;
 
     println!("\n╔══════════════════════════════════════════════════╗");
-    println!("║  MiMC7：递推版 x <- (x + k_i)^7                  ║");
+    println!("║  MiMC7: recursive x <- (x + k_i)^7               ║");
     println!("╚══════════════════════════════════════════════════╝\n");
 
-    println!("【1. 生成电路】");
-    println!("  轮数: {}", generated.config.num_rounds);
+    println!("[1. Circuit generation]");
+    println!("  Round count: {}", generated.config.num_rounds);
     println!(
-        "  demo 输入 x{}: {}",
+        "  Demo input x{}: {}",
         generated.circuit.input_index,
         coeff_to_string(&generated.config.input_value)
     );
     println!(
-        "  输入 lift witness: w{}",
+        "  Input lift witness: w{}",
         generated.circuit.lifted_input_witness
     );
     println!(
-        "  最终输出 witness: w{}",
+        "  Per-round output witnesse",
         generated.circuit.round_output_witness_indices.last().unwrap()
     );
     generated.circuit.r1cs.print_stats();
 
-    println!("\n【2. 电路转换】");
+    println!("\n[2. Circuit transformation]");
     transformed.transformed.r1cs.print_stats();
     println!(
-        "  Choudhuri 膨胀倍数: {:.2}x",
+        "  Choudhuri blowup factor: {:.2}x",
         transformed.transformed.blowup_factor
     );
-    println!("  CSE 消除重复约束:  {}", transformed.eliminated);
+    println!("  CSE eliminated duplicate constraints: {}", transformed.eliminated);
     println!(
-        "  最终膨胀倍数:      {:.2}x",
+        "  Final blowup factor: {:.2}x",
         transformed.optimized.constraints.len() as f64
             / generated.circuit.r1cs.constraints.len() as f64
     );
 
-    println!("\n【3. Eval 一致性】");
+    println!("\n[3. Eval consistency]");
     let final_expected = generated.expected_round_outputs.last().unwrap();
     let final_original = evaluation.original_round_outputs.last().unwrap();
     let final_transformed = evaluation.transformed_round_outputs.last().unwrap();
     println!(
-        "  期望最终输出: {}",
+        "  Final expected output: {}",
         coeff_to_string(final_expected)
     );
     println!(
-        "  原始最终输出: {}",
+        "  Final original outputs: {}",
         coeff_to_string(final_original)
     );
     println!(
-        "  转换后最终输出: {}",
+        "  Final transformed outputs: {}",
         coeff_to_string(final_transformed)
     );
     println!(
-        "  输出一致: {}  [约束满足: orig={}, rms+cse={}]",
+        "  Outputs match: {}  [constraints satisfied: orig={}, rms+cse={}]",
         evaluation.outputs_match, evaluation.original_valid, evaluation.transformed_valid
     );
 
-    println!("\n【4. 电路导出】");
+    println!("\n[4. Circuit export]");
     println!("  BIN:  {}", export.bin_path);
     if let Some(json_path) = &export.json_path {
         println!("  JSON: {}", json_path);
     }
-    println!("  版本: {}", export.version);
-    println!("  约束数: {}", export.num_constraints);
+    println!("  Version: {}", export.version);
+    println!("  Constraints: {}", export.num_constraints);
     if let Some(json_bin_match) = export.json_bin_match {
-        println!("  JSON/BIN 内容一致: {}", json_bin_match);
+        println!("  JSON/BIN contents match: {}", json_bin_match);
     }
-    println!("  前 8 条最终 RMS 约束:");
-    let exported_bin = load_r1cs_from_bin(&export.bin_path).expect("读取 BIN 导出文件失败");
+    println!("  First 8 final RMS constraints:");
+    let exported_bin = load_r1cs_from_bin(&export.bin_path).expect("Failed to read BIN export file");
     for constraint in exported_bin.constraints.iter().take(8) {
         println!(
             "    step {:>2}: ({} ) * ({} ) -> w{}",
@@ -408,7 +410,7 @@ fn run_with_config(
         );
     }
 
-    println!("\n【前 8 条原始约束预览】");
+    println!("\n[Preview of the first 8 original constraints]");
     let original_preview = R1CS {
         num_inputs: generated.circuit.r1cs.num_inputs,
         num_witnesses: generated.circuit.r1cs.num_witnesses,
@@ -433,7 +435,7 @@ fn validate_num_rounds(num_rounds: usize, available_rounds: usize) -> Result<(),
     }
     if num_rounds > available_rounds {
         return Err(format!(
-            "num_rounds={num_rounds} 超出内置 MiMC7 round constants 上限 {available_rounds}"
+            "num_rounds={num_rounds} exceeds the built-in MiMC7 round constants limit {available_rounds}"
         ));
     }
     Ok(())
@@ -441,19 +443,19 @@ fn validate_num_rounds(num_rounds: usize, available_rounds: usize) -> Result<(),
 
 fn parse_usize_arg(name: &str, raw: &str) -> Result<usize, String> {
     raw.parse::<usize>()
-        .map_err(|err| format!("{name} 必须是非负整数，收到 {raw:?}: {err}"))
+        .map_err(|err| format!("{name} must be a non-negative integer, got {raw:?}: {err}"))
 }
 
 fn usage_text() -> &'static str {
     "\
-用法:
+Usage:
   cargo run -- mimc7 [--json]
   cargo run -- mimc7 <num_rounds> [--json]
   cargo run --example mimc7 -- <num_rounds> [--json]
 
-说明:
-  手写递推版 MiMC7：每轮执行 x <- (x + k_i)^7，再转换导出最终 RMS。
-  默认只导出 .bin；追加 --json 时同时导出 .json。"
+Notes:
+    Hand-written recursive MiMC7: each round applies x <- (x + k_i)^7, then the final RMS artifact is transformed and exported.
+    By default only `.bin` is exported; append `--json` to also emit `.json`."
 }
 
 fn read_output_vector(output_witnesses: &[usize], assignment: &Assignment) -> Vec<Fr> {
@@ -464,7 +466,7 @@ fn read_output_vector(output_witnesses: &[usize], assignment: &Assignment) -> Ve
 }
 
 fn parse_fr(raw: &str) -> Result<Fr, String> {
-    Fr::from_str(raw).map_err(|err| format!("字段元素解析失败 {raw:?}: {err:?}"))
+    Fr::from_str(raw).map_err(|err| format!("Failed to parse field element {raw:?}: {err:?}"))
 }
 
 #[cfg(test)]

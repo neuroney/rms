@@ -39,7 +39,7 @@ fn dispatch(args: Vec<String>) -> Result<(), String> {
             print_usage();
             Ok(())
         }
-        _ => Err(format!("未知命令: {}\n\n{}", args.join(" "), usage_text())),
+        _ => Err(format!("Unknown command: {}\n\n{}", args.join(" "), usage_text())),
     }
 }
 
@@ -51,7 +51,7 @@ fn usage_text() -> &'static str {
     "\
 RMS Toolkit
 
-用法:
+Usage:
   cargo run
   cargo run -- fixmat [dim] [--json]
   cargo run -- twomat [dim] [--json]
@@ -67,11 +67,11 @@ RMS Toolkit
   cargo run -- import <constraints.json|circuit.r1cs|circuit.circom> [--json]
   cargo run -- circom <constraints.json|circuit.r1cs|circuit.circom> [--json]
 
-说明:
-  默认运行 TwoMat 示例。
-  内置 11 个核心命令: circom、dense_poly、fixmat、greater_than、mimc7、page_rank、privdb、pubdb、random_linear、random_mul、twomat。
-  其中 10 个走 Rust 代码路径生成最终 RMS 工件；`circom` 负责从通用 Circom 电路导入并转换为 RMS。
-  `fixmat` 接收公开固定矩阵与私有向量乘法的方阵维度，`twomat` 接收两个私有方阵乘法的维度。
-  `page_rank` 支持 `iterations` 或 `num_vertices iterations`，`pubdb`/`privdb` 接收指数 `x` 并设置 `n=2^x`，其余命令支持对应的核心规模参数。
-  默认只导出 .bin；追加 `--json` 时同时导出 .json。"
+Notes:
+    Defaults to the TwoMat example.
+    The toolkit includes 11 core commands: circom, dense_poly, fixmat, greater_than, mimc7, page_rank, privdb, pubdb, random_linear, random_mul, and twomat.
+    Ten of them generate the final RMS artifact through Rust code paths; `circom` imports a generic Circom circuit and converts it to RMS.
+    `fixmat` takes the square dimension for public fixed-matrix times private-vector multiplication, and `twomat` takes the dimension for two private square matrices.
+    `page_rank` supports `iterations` or `num_vertices iterations`; `pubdb` and `privdb` take exponent `x` and set `n=2^x`; the remaining commands accept their respective size parameters.
+    By default only `.bin` is exported; append `--json` to also emit `.json`."
 }

@@ -1,3 +1,5 @@
+//! Circom JSON/R1CS import, normalization, and symbol handling utilities.
+
 use crate::r1cs::{Constraint, LinComb, Variable, R1CS};
 use crate::transform::{choudhuri_transform, eliminate_common_subexpressions, TransformResult};
 use crate::utils::fr_from_i64;
@@ -196,22 +198,22 @@ pub fn load_circom_sym<P: AsRef<Path>>(path: P) -> Result<CircomSymbolTable, Box
         let mut parts = line.splitn(4, ',');
         let signal_id = parts
             .next()
-            .ok_or_else(|| format!(".sym 第 {} 行缺少 signal id", line_no + 1))?
+            .ok_or_else(|| format!(".sym line {} is missing a signal id", line_no + 1))?
             .trim()
             .parse::<usize>()?;
         let witness_position = parts
             .next()
-            .ok_or_else(|| format!(".sym 第 {} 行缺少 witness position", line_no + 1))?
+            .ok_or_else(|| format!(".sym line {} is missing a witness position", line_no + 1))?
             .trim()
             .parse::<isize>()?;
         let component_id = parts
             .next()
-            .ok_or_else(|| format!(".sym 第 {} 行缺少 component id", line_no + 1))?
+            .ok_or_else(|| format!(".sym line {} is missing a component id", line_no + 1))?
             .trim()
             .parse::<usize>()?;
         let qualified_name = parts
             .next()
-            .ok_or_else(|| format!(".sym 第 {} 行缺少 signal name", line_no + 1))?
+            .ok_or_else(|| format!(".sym line {} is missing a signal name", line_no + 1))?
             .trim()
             .to_string();
 
@@ -312,7 +314,7 @@ impl AliasResolver {
             let weight = left_factor
                 * denom.inverse().ok_or_else(|| {
                     format!(
-                        "alias 约束无法归一化: signal {} / {} 的比例不可逆",
+                        "alias constraint cannot be normalized: the ratio for signal {} / {} is not invertible",
                         left_signal, right_signal
                     )
                 })?;
@@ -323,7 +325,7 @@ impl AliasResolver {
                 * right_factor
                 * left_factor.inverse().ok_or_else(|| {
                     format!(
-                        "alias 约束无法归一化: signal {} / {} 的比例不可逆",
+                        "alias constraint cannot be normalized: the ratio for signal {} / {} is not invertible",
                         left_signal, right_signal
                     )
                 })?;
@@ -358,7 +360,7 @@ fn canonicalize_simple_aliases(
         };
         let inv = left_coeff.inverse().ok_or_else(|| {
             format!(
-                "alias 约束中 signal {} 的系数不可逆，无法做别名折叠",
+                "The coefficient of signal {} in the alias constraint is not invertible, so alias folding cannot be performed",
                 left_signal
             )
         })?;
@@ -421,7 +423,7 @@ fn detect_circom_format(path: &Path) -> Result<CircomImportFormat, Box<dyn Error
         Some("json") => Ok(CircomImportFormat::ConstraintsJson),
         Some("r1cs") => Ok(CircomImportFormat::BinaryR1cs),
         _ => Err(format!(
-            "无法识别 Circom 文件格式: {}，目前只支持 .json 和 .r1cs",
+            "Could not recognize Circom file format: {}. Only .json and .r1cs are supported",
             path.display()
         )
         .into()),
@@ -511,7 +513,7 @@ fn import_generic_constraints(
 
     if !unknown_non_inputs.is_empty() {
         return Err(format!(
-            "导入失败：发现未定义且不属于外部输入的 signal {:?}。这通常意味着电路依赖 hint/witness assignment，目前该路径不支持这类 .r1cs",
+            "Import failed: found undefined signals that do not belong to external inputs: {:?}. This usually means the circuit depends on hint/witness assignment, which this path does not support for this kind of .r1cs",
             unknown_non_inputs
         )
         .into());
@@ -557,7 +559,7 @@ fn parse_generic_lincomb(raw: HashMap<String, String>) -> Result<GenericLinComb,
         .map(|(signal, coeff)| {
             let signal_id = signal.parse::<usize>()?;
             let coeff =
-                Fr::from_str(&coeff).map_err(|_| format!("无法解析 Circom 系数: {}", coeff))?;
+                Fr::from_str(&coeff).map_err(|_| format!("Failed to parse Circom coefficient: {}", coeff))?;
             Ok((coeff, signal_id))
         })
         .collect::<Result<Vec<_>, Box<dyn Error>>>()?;
@@ -572,12 +574,12 @@ fn parse_binary_r1cs(
     let mut magic = [0u8; 4];
     reader.read_exact(&mut magic)?;
     if &magic != b"r1cs" {
-        return Err("不是合法的 .r1cs 文件：magic 不匹配".into());
+        return Err("Invalid .r1cs file: magic mismatch".into());
     }
 
     let version = read_u32(&mut reader)?;
     if version != 1 {
-        return Err(format!("不支持的 .r1cs 版本: {}", version).into());
+        return Err(format!("Unsupported .r1cs version: {}", version).into());
     }
 
     let num_sections = read_u32(&mut reader)? as usize;
@@ -592,17 +594,17 @@ fn parse_binary_r1cs(
 
     let header_bytes = sections
         .remove(&1)
-        .ok_or("缺少 R1CS header section (type 1)")?;
+        .ok_or("Missing R1CS header section (type 1)")?;
     let header = parse_binary_r1cs_header(&header_bytes)?;
 
     let expected_prime = pad_le_bytes(<Fr as PrimeField>::MODULUS.to_bytes_le(), header.field_size);
     if header.prime != expected_prime {
-        return Err("当前只支持 BN254 标量域上的 .r1cs 文件".into());
+        return Err("Only .r1cs files over the BN254 scalar field are supported".into());
     }
 
     let constraints_bytes = sections
         .remove(&2)
-        .ok_or("缺少 R1CS constraints section (type 2)")?;
+        .ok_or("Missing R1CS constraints section (type 2)")?;
     let constraints = parse_binary_r1cs_constraints(&constraints_bytes, &header)?;
 
     if let Some(map_bytes) = sections.remove(&3) {
@@ -616,7 +618,7 @@ fn parse_binary_r1cs_header(bytes: &[u8]) -> Result<BinaryR1csHeader, Box<dyn Er
     let mut reader = Cursor::new(bytes);
     let field_size = read_u32(&mut reader)? as usize;
     if field_size == 0 || field_size % 8 != 0 {
-        return Err(format!("非法 field size: {}", field_size).into());
+        return Err(format!("Invalid field size: {}", field_size).into());
     }
 
     let mut prime = vec![0u8; field_size];
@@ -634,13 +636,13 @@ fn parse_binary_r1cs_header(bytes: &[u8]) -> Result<BinaryR1csHeader, Box<dyn Er
     };
 
     if header.n_wires == 0 {
-        return Err("非法 .r1cs：nWires 不能为 0".into());
+        return Err("Invalid .r1cs: nWires cannot be 0".into());
     }
 
     let reserved_wires = 1 + header.n_pub_out + header.n_pub_in + header.n_prv_in;
     if reserved_wires > header.n_wires {
         return Err(format!(
-            "非法 .r1cs：输入/输出 wire 总数 {} 超过 nWires={}",
+            "Invalid .r1cs: the total number of input/output wires {} exceeds nWires={}",
             reserved_wires, header.n_wires
         )
         .into());
@@ -649,14 +651,14 @@ fn parse_binary_r1cs_header(bytes: &[u8]) -> Result<BinaryR1csHeader, Box<dyn Er
     let expected_min_labels = header.n_wires as u64;
     if header.n_labels < expected_min_labels {
         return Err(format!(
-            "非法 .r1cs：nLabels={} 小于 nWires={}",
+            "Invalid .r1cs: nLabels={} is less than nWires={}",
             header.n_labels, header.n_wires
         )
         .into());
     }
 
     if reader.position() != bytes.len() as u64 {
-        return Err("R1CS header section 长度不匹配".into());
+        return Err("R1CS header section length mismatch".into());
     }
 
     Ok(header)
@@ -677,7 +679,7 @@ fn parse_binary_r1cs_constraints(
     }
 
     if reader.position() != bytes.len() as u64 {
-        return Err("R1CS constraints section 长度不匹配".into());
+        return Err("R1CS constraints section length mismatch".into());
     }
 
     Ok(constraints)
@@ -694,7 +696,7 @@ fn parse_binary_r1cs_lincomb<R: Read>(
         let wire_id = read_u32(reader)? as usize;
         if wire_id >= header.n_wires {
             return Err(format!(
-                "非法 .r1cs：wire id {} 超出 nWires={}",
+                "Invalid .r1cs: wire id {} exceeds nWires={}",
                 wire_id, header.n_wires
             )
             .into());
@@ -712,10 +714,10 @@ fn parse_binary_r1cs_lincomb<R: Read>(
 fn validate_wire_to_label_section(bytes: &[u8], n_wires: usize) -> Result<(), Box<dyn Error>> {
     let expected_size = n_wires
         .checked_mul(8)
-        .ok_or("wire2label section 大小溢出")?;
+        .ok_or("wire2label section size overflow")?;
     if bytes.len() != expected_size {
         return Err(format!(
-            "wire2label section 长度不匹配：期望 {}，实际 {}",
+            "wire2label section length mismatch: expected {}, got {}",
             expected_size,
             bytes.len()
         )
@@ -785,10 +787,10 @@ fn extract_signal_definitions(
             let coeff = constraint
                 .c
                 .coefficient_of(target)
-                .ok_or_else(|| format!("二次约束中找不到目标 signal {}", target))?;
+                .ok_or_else(|| format!("Could not find target signal {} in the quadratic constraint", target))?;
             let inv = coeff
                 .inverse()
-                .ok_or_else(|| format!("signal {} 的系数不可逆", target))?;
+                .ok_or_else(|| format!("The coefficient of signal {} is not invertible", target))?;
             let rest = constraint.c.without_signal(target);
             definitions.insert(
                 target,
@@ -999,7 +1001,7 @@ impl<'a> BuildState<'a> {
         }
 
         if !self.linear_signal_in_progress.insert(signal_id) {
-            return Err(format!("检测到 Circom signal {} 的循环线性求解", signal_id).into());
+            return Err(format!("Detected cyclic linear resolution for Circom signal {}", signal_id).into());
         }
 
         let candidate_indices = self
@@ -1056,12 +1058,12 @@ impl<'a> BuildState<'a> {
         }
 
         self.linear_signal_in_progress.remove(&signal_id);
-        Err(format!("signal {} 没有可解的线性定义", signal_id).into())
+        Err(format!("Signal {} has no solvable linear definition", signal_id).into())
     }
 
     fn materialize_signal(&mut self, signal_id: usize) -> Result<usize, Box<dyn Error>> {
         if self.input_signal_to_index.contains_key(&signal_id) {
-            return Err(format!("signal {} 是输入，不能作为 witness 物化", signal_id).into());
+            return Err(format!("Signal {} is an input and cannot be materialized as a witness", signal_id).into());
         }
 
         self.ensure_signal_definition(signal_id)?;
@@ -1072,14 +1074,14 @@ impl<'a> BuildState<'a> {
             return Ok(witness_idx);
         }
         if !self.signal_in_progress.insert(signal_id) {
-            return Err(format!("检测到 Circom signal {} 的循环定义", signal_id).into());
+            return Err(format!("Detected cyclic definition for Circom signal {}", signal_id).into());
         }
 
         let definition = self
             .signal_defs
             .get(&signal_id)
             .cloned()
-            .ok_or_else(|| format!("signal {} 没有定义", signal_id))?;
+            .ok_or_else(|| format!("Signal {} is not defined", signal_id))?;
 
         match definition {
             SignalDefinition::Linear(expr) => {
@@ -1359,13 +1361,13 @@ impl<'a> BuildState<'a> {
                     .signal_defs
                     .get(&signal_id)
                     .cloned()
-                    .ok_or_else(|| format!("signal {} 没有定义", signal_id))?;
+                    .ok_or_else(|| format!("Signal {} is not defined", signal_id))?;
 
                 match definition {
                     SignalDefinition::Linear(expr) => {
                         if !expanding_linear.insert(signal_id) {
                             return Err(format!(
-                                "检测到 Circom signal {} 的循环线性定义",
+                                "Detected cyclic linear definition for Circom signal {}",
                                 signal_id
                             )
                             .into());
@@ -1753,9 +1755,9 @@ mod tests {
         }"#;
 
         let file = tempfile_path("basic_constraints.json");
-        fs::write(&file, circom_json).expect("写入 circom fixture 失败");
+        fs::write(&file, circom_json).expect("Failed to write circom fixture");
 
-        let imported = import_circom_constraints_json(&file).expect("导入 circom json 失败");
+        let imported = import_circom_constraints_json(&file).expect("Failed to import circom json");
         assert_eq!(imported.original_constraints, 2);
         assert!(imported.normalized_r1cs.constraints.len() >= 4);
         assert_eq!(imported.input_signal_ids, vec![2, 3, 6]);
@@ -1769,7 +1771,7 @@ mod tests {
         assert!(verify_assignment(&imported.normalized_r1cs, &assignment));
 
         let output_witness = imported.witness_signal_to_index[&1];
-        let output = fr_to_u64(&assignment.witnesses[&output_witness]).expect("输出超出 u64");
+        let output = fr_to_u64(&assignment.witnesses[&output_witness]).expect("Output exceeds u64");
         assert_eq!(output, 54);
 
         let transformed = choudhuri_transform(&imported.normalized_r1cs);
@@ -1783,7 +1785,7 @@ mod tests {
     #[test]
     fn imports_official_circomlib_and_fixture_and_preserves_truth_table() {
         let imported = import_circom_constraints_json("./fixtures/circomlib_and.json")
-            .expect("导入 circomlib AND fixture 失败");
+            .expect("Failed to import circomlib AND fixture");
 
         assert_eq!(imported.original_constraints, 1);
         assert_eq!(imported.input_signal_ids, vec![2, 3]);
@@ -1803,7 +1805,7 @@ mod tests {
                 &original_assignment
             ));
             let original_output =
-                fr_to_u64(&original_assignment.witnesses[&output_witness]).expect("输出超出 u64");
+                fr_to_u64(&original_assignment.witnesses[&output_witness]).expect("Output exceeds u64");
 
             let mut optimized_assignment = Assignment::new(vec![
                 (imported.input_signal_to_index[&2], a),
@@ -1812,16 +1814,16 @@ mod tests {
             assert!(execute_circuit(&optimized, &mut optimized_assignment).is_some());
             assert!(verify_assignment(&optimized, &optimized_assignment));
             let optimized_output =
-                fr_to_u64(&optimized_assignment.witnesses[&output_witness]).expect("输出超出 u64");
+                fr_to_u64(&optimized_assignment.witnesses[&output_witness]).expect("Output exceeds u64");
 
             assert_eq!(
                 original_output, expected,
-                "原始电路输出错误: a={}, b={}",
+                "Original circuit output incorrect: a={}, b={}",
                 a, b
             );
             assert_eq!(
                 optimized_output, expected,
-                "转换后输出错误: a={}, b={}",
+                "Transformed output incorrect: a={}, b={}",
                 a, b
             );
         }
@@ -1830,9 +1832,9 @@ mod tests {
     #[test]
     fn imports_binary_r1cs_and_preserves_truth_table() {
         let file = tempfile_path("circomlib_and.r1cs");
-        fs::write(&file, build_binary_and_r1cs_fixture()).expect("写入 .r1cs fixture 失败");
+        fs::write(&file, build_binary_and_r1cs_fixture()).expect("Failed to write .r1cs fixture");
 
-        let imported = import_circom_r1cs(&file).expect("导入二进制 .r1cs 失败");
+        let imported = import_circom_r1cs(&file).expect("Failed to import binary .r1cs");
         assert_eq!(imported.original_constraints, 1);
         assert_eq!(imported.input_signal_ids, vec![2, 3]);
 
@@ -1855,7 +1857,7 @@ mod tests {
                 &original_assignment
             ));
             let original_output =
-                fr_to_u64(&original_assignment.witnesses[&output_witness]).expect("输出超出 u64");
+                fr_to_u64(&original_assignment.witnesses[&output_witness]).expect("Output exceeds u64");
 
             let mut optimized_assignment = Assignment::new(vec![
                 (imported.input_signal_to_index[&2], a),
@@ -1864,16 +1866,16 @@ mod tests {
             assert!(execute_circuit(&optimized, &mut optimized_assignment).is_some());
             assert!(verify_assignment(&optimized, &optimized_assignment));
             let optimized_output =
-                fr_to_u64(&optimized_assignment.witnesses[&output_witness]).expect("输出超出 u64");
+                fr_to_u64(&optimized_assignment.witnesses[&output_witness]).expect("Output exceeds u64");
 
             assert_eq!(
                 original_output, expected,
-                "原始二进制导入电路输出错误: a={}, b={}",
+                "Original binary-imported circuit output incorrect: a={}, b={}",
                 a, b
             );
             assert_eq!(
                 optimized_output, expected,
-                "转换后二进制导入电路输出错误: a={}, b={}",
+                "Transformed binary-imported circuit output incorrect: a={}, b={}",
                 a, b
             );
         }
@@ -1903,7 +1905,7 @@ mod tests {
                 private_input_signal_ids: vec![],
             },
         )
-        .expect("死 signal 不应阻止导入");
+        .expect("Dead signals should not block import");
 
         assert_eq!(imported.input_signal_ids, vec![2]);
         assert!(!imported.witness_signal_to_index.contains_key(&5));
@@ -1915,7 +1917,7 @@ mod tests {
         assert!(verify_assignment(&imported.normalized_r1cs, &assignment));
 
         let output_witness = imported.witness_signal_to_index[&1];
-        let output = fr_to_u64(&assignment.witnesses[&output_witness]).expect("输出超出 u64");
+        let output = fr_to_u64(&assignment.witnesses[&output_witness]).expect("Output exceeds u64");
         assert_eq!(output, 9);
     }
 

@@ -1,5 +1,7 @@
 #![forbid(unsafe_code)]
 
+//! Library entrypoint exporting RMS demos, Circom import flows, and helpers.
+
 //! Library entry point for the RMS circuit toolkit.
 //!
 //! Public API is organized into:

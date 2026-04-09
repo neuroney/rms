@@ -1,3 +1,5 @@
+//! Sparse PageRank demo circuit generation, transformation, evaluation, and export.
+
 use crate::evalr1cs::{execute_circuit, verify_assignment, Assignment};
 use crate::export::{
     load_r1cs_from_bin, split_export_cli_args, terms_to_export_string,
@@ -173,8 +175,8 @@ impl PageRankRunConfig {
 }
 
 pub fn generate_page_rank_r1cs(compiled: &CompiledPageRank) -> PageRankCircuit {
-    assert!(compiled.num_vertices > 0, "PageRank 顶点数必须大于 0");
-    assert!(compiled.iterations > 0, "PageRank 迭代次数必须大于 0");
+    assert!(compiled.num_vertices > 0, "PageRank vertex count must be greater than 0");
+    assert!(compiled.iterations > 0, "PageRank iteration count must be greater than 0");
 
     let num_inputs =
         FIRST_EXTERNAL_INPUT_INDEX + compiled.edge_weights.len() + compiled.num_vertices;
@@ -416,7 +418,7 @@ pub fn export_circuit_with_options(
 }
 
 pub fn run() {
-    run_with_args(&[]).expect("PageRank 示例失败");
+    run_with_args(&[]).expect("PageRank example failed");
 }
 
 pub fn run_with_args(args: &[String]) -> Result<(), String> {
@@ -453,80 +455,80 @@ fn run_with_config(
     let transformed = transform_circuit(&generated);
     let evaluation = evaluate_equivalence(&generated, &transformed);
     let export = export_circuit_with_options(&generated, &transformed, export_options)
-        .map_err(|err| format!("导出 PageRank RMS 电路失败: {err}"))?;
+        .map_err(|err| format!("Failed to export PageRank RMS circuit: {err}"))?;
 
     let audit_matrix = build_transition_matrix_approx(&generated.compiled);
 
     println!("\n╔══════════════════════════════════════════════════════╗");
-    println!("║  PageRank 示例：公开稀疏支撑 + 私有边权/初始 rank   ║");
+    println!("║  PageRank: public sparse support + private edge weights/initial rank ║");
     println!("╚══════════════════════════════════════════════════════╝\n");
 
-    println!("【1. 生成电路】");
-    println!("  顶点数: {}", generated.compiled.num_vertices);
-    println!("  稀疏边数: {}", generated.compiled.edge_weights.len());
+    println!("[1. Circuit generation]");
+    println!("  Vertex count: {}", generated.compiled.num_vertices);
+    println!("  Sparse edge count: {}", generated.compiled.edge_weights.len());
     println!(
-        "  平均公开出度: {:.2}",
+        "  Average public out-degree: {:.2}",
         average_out_degree(&generated.compiled.out_degrees)
     );
     println!(
-        "  demo 采样权重: alpha = {}/{}（仅用于生成私有边权）",
+        "  Demo sampling weight: alpha = {}/{} (used only to generate private edge weights)",
         DEFAULT_ALPHA_NUM, DEFAULT_ALPHA_DEN
     );
-    println!("  公开稀疏支撑 S:");
+    println!("  Public sparse support S:");
     print_adjacency_matrix(&generated.compiled.support);
-    println!("  私有边权 W_sparse（仅 demo 审计打印）:");
+    println!("  Private edge weights W_sparse (printed for demo audit only):");
     print_private_edge_weights(
         &generated.compiled.edge_weights,
         &generated.compiled.outgoing_edge_indices,
     );
-    println!("  每行私有权重和 / teleport residual:");
+    println!("  Per-row private weight sum / teleport residual:");
     print_row_mass_summary(
         &generated.compiled.row_weight_sums_approx,
         &generated.compiled.residual_mass_approx,
     );
     println!(
-        "  私有初始 rank r^(0): {}",
+        "  Private initial rank r^(0): {}",
         format_approx_vector(&generated.initial_rank_approx)
     );
-    println!("  仅用于审计的密集转移矩阵 G:");
+    println!("  Dense transition matrix G for audit only:");
     print_approx_matrix("G", &audit_matrix);
     generated.circuit.r1cs.print_stats();
 
-    println!("\n【2. 电路转换】");
+    println!("\n[2. Circuit transformation]");
     transformed.transformed.r1cs.print_stats();
     println!(
-        "  Choudhuri 膨胀倍数: {:.2}x",
+        "  Choudhuri blowup factor: {:.2}x",
         transformed.transformed.blowup_factor
     );
-    println!("  CSE 消除重复约束:  {}", transformed.eliminated);
+    println!("  CSE eliminated duplicate constraints: {}", transformed.eliminated);
     println!(
-        "  最终膨胀倍数:      {:.2}x",
+        "  Final blowup factor: {:.2}x",
         transformed.optimized.constraints.len() as f64
             / generated.circuit.r1cs.constraints.len() as f64
     );
 
-    println!("\n【3. Eval 一致性】");
+    println!("\n[3. Eval consistency]");
     println!(
-        "  期望 PageRank(T): {}",
+        "  Expected PageRank(T): {}",
         format_approx_vector(&evaluation.expected_output_approx)
     );
     println!(
-        "  输出一致: {}  [约束满足: orig={}, rms+cse={}]",
+        "  Outputs match: {}  [constraints satisfied: orig={}, rms+cse={}]",
         evaluation.outputs_match, evaluation.original_valid, evaluation.transformed_valid
     );
 
-    println!("\n【4. 电路导出】");
+    println!("\n[4. Circuit export]");
     println!("  BIN:  {}", export.bin_path);
     if let Some(json_path) = &export.json_path {
         println!("  JSON: {}", json_path);
     }
-    println!("  版本: {}", export.version);
-    println!("  约束数: {}", export.num_constraints);
+    println!("  Version: {}", export.version);
+    println!("  Constraints: {}", export.num_constraints);
     if let Some(json_bin_match) = export.json_bin_match {
-        println!("  JSON/BIN 内容一致: {}", json_bin_match);
+        println!("  JSON/BIN contents match: {}", json_bin_match);
     }
-    println!("  前 8 条最终 RMS 约束:");
-    let exported_bin = load_r1cs_from_bin(&export.bin_path).expect("读取 BIN 导出文件失败");
+    println!("  First 8 final RMS constraints:");
+    let exported_bin = load_r1cs_from_bin(&export.bin_path).expect("Failed to read BIN export file");
     for constraint in exported_bin.constraints.iter().take(8) {
         println!(
             "    step {:>2}: ({} ) * ({} ) -> w{}",
@@ -537,7 +539,7 @@ fn run_with_config(
         );
     }
 
-    println!("\n【前 8 条原始约束预览】");
+    println!("\n[Preview of the first 8 original constraints]");
     let original_preview = R1CS {
         num_inputs: generated.circuit.r1cs.num_inputs,
         num_witnesses: generated.circuit.r1cs.num_witnesses,
@@ -557,30 +559,30 @@ fn run_with_config(
 }
 
 fn validate_config(config: &PageRankRunConfig) {
-    assert!(config.num_vertices > 0, "PageRank 图不能为空");
-    assert!(config.iterations > 0, "PageRank 迭代次数必须大于 0");
+    assert!(config.num_vertices > 0, "PageRank graph cannot be empty");
+    assert!(config.iterations > 0, "PageRank iteration count must be greater than 0");
     assert_eq!(
         config.initial_rank.len(),
         config.num_vertices,
-        "初始 rank 长度必须等于顶点数"
+        "Initial rank length must equal the vertex count"
     );
     assert_eq!(
         config.initial_rank_approx.len(),
         config.num_vertices,
-        "初始 rank 近似长度必须等于顶点数"
+        "Initial rank approximation length must equal the vertex count"
     );
 
     let initial_sum = config.initial_rank_approx.iter().sum::<f64>();
     assert!(
         (initial_sum - 1.0).abs() <= PROBABILITY_EPSILON,
-        "初始 rank 近似和必须为 1，当前为 {initial_sum:.6}"
+        "Initial rank approximation must sum to 1, current sum is {initial_sum:.6}"
     );
     assert!(
         config
             .initial_rank_approx
             .iter()
             .all(|&value| value >= -PROBABILITY_EPSILON),
-        "初始 rank 近似值必须非负"
+        "Initial rank approximation values must be non-negative"
     );
 
     let mut seen_edges = BTreeSet::new();
@@ -588,20 +590,20 @@ fn validate_config(config: &PageRankRunConfig) {
     for edge in &config.edge_weights {
         assert!(
             edge.source < config.num_vertices && edge.target < config.num_vertices,
-            "边 ({}, {}) 超出顶点范围 [0, {})",
+            "Edge ({}, {}) exceeds vertex range [0, {})",
             edge.source,
             edge.target,
             config.num_vertices
         );
         assert!(
             seen_edges.insert((edge.source, edge.target)),
-            "重复的稀疏边 ({}, {})",
+            "Duplicate sparse edge ({}, {})",
             edge.source,
             edge.target
         );
         assert!(
             edge.weight_approx >= -PROBABILITY_EPSILON,
-            "边权近似值必须非负"
+            "Edge weight approximation must be non-negative"
         );
         row_weight_sums_approx[edge.source] += edge.weight_approx;
     }
@@ -609,7 +611,7 @@ fn validate_config(config: &PageRankRunConfig) {
     for (source, row_sum) in row_weight_sums_approx.iter().enumerate() {
         assert!(
             *row_sum <= 1.0 + PROBABILITY_EPSILON,
-            "源点 v{} 的稀疏边权和必须不超过 1，当前为 {:.6}",
+            "Sparse edge weight sum for source v{} must not exceed 1, current sum is {:.6}",
             source,
             row_sum
         );
@@ -617,18 +619,18 @@ fn validate_config(config: &PageRankRunConfig) {
 }
 
 fn validate_adjacency(adjacency: &[Vec<u8>]) {
-    assert!(!adjacency.is_empty(), "PageRank 图不能为空");
+    assert!(!adjacency.is_empty(), "PageRank graph cannot be empty");
     let num_vertices = adjacency.len();
     for (row_idx, row) in adjacency.iter().enumerate() {
         assert_eq!(
             row.len(),
             num_vertices,
-            "邻接矩阵第 {} 行长度与顶点数不一致",
+            "Adjacency matrix row {} length does not match the vertex count",
             row_idx
         );
         assert!(
             row.iter().all(|&value| matches!(value, 0 | 1)),
-            "邻接矩阵必须是 0/1 矩阵"
+            "Adjacency matrix must be a 0/1 matrix"
         );
     }
 }
@@ -687,7 +689,7 @@ fn build_uniform_rank_vector(num_vertices: usize) -> (Vec<Fr>, Vec<f64>) {
 }
 
 fn build_sample_rank_vector(num_vertices: usize, seed: u64) -> (Vec<Fr>, Vec<f64>) {
-    assert!(num_vertices > 0, "PageRank 图不能为空");
+    assert!(num_vertices > 0, "PageRank graph cannot be empty");
 
     let mut rng = StdRng::seed_from_u64(seed);
     let raw_weights = (0..num_vertices)
@@ -749,7 +751,7 @@ fn sample_sparse_directed_graph(
     target_out_degree: usize,
     seed: u64,
 ) -> Vec<Vec<u8>> {
-    assert!(num_vertices > 0, "PageRank 图不能为空");
+    assert!(num_vertices > 0, "PageRank graph cannot be empty");
     if num_vertices == 1 {
         return vec![vec![0]];
     }
@@ -1010,35 +1012,35 @@ fn format_approx_vector(values: &[f64]) -> String {
 fn parse_positive_usize_arg(name: &str, raw: &str) -> Result<usize, String> {
     let value = raw
         .parse::<usize>()
-        .map_err(|err| format!("{name} 必须是非负整数，收到 {raw:?}: {err}"))?;
+        .map_err(|err| format!("{name} must be a non-negative integer, got {raw:?}: {err}"))?;
     if value == 0 {
-        return Err(format!("{name} 必须大于 0"));
+        return Err(format!("{name} must be greater than 0"));
     }
     Ok(value)
 }
 
 fn fr_fraction(num: u64, den: u64) -> Fr {
-    assert!(den > 0, "分母必须大于 0");
+    assert!(den > 0, "Denominator must be greater than 0");
     Fr::from(num) * fr_inverse_u64(den)
 }
 
 fn fr_inverse_u64(value: u64) -> Fr {
-    Fr::from(value).inverse().expect("分母必须在当前域中可逆")
+    Fr::from(value).inverse().expect("Denominator must be invertible in the current field")
 }
 
 fn usage_text() -> &'static str {
     "\
-用法:
+Usage:
   cargo run -- page_rank [--json]
   cargo run -- page_rank <iterations> [--json]
   cargo run -- page_rank <num_vertices> <iterations> [--json]
 
-说明:
-  默认参数: num_vertices=16, iterations=5。
-  公开部分只保留 x0=1 与稀疏支撑模式；私有输入包含稀疏边权和初始 rank。
-  demo 私有边权由 alpha=17/20 与采样邻接矩阵生成，行剩余质量通过 uniform teleport 分发。
-  默认稀疏支撑按有向 G(n, p) 采样，禁止自环，p=min(8/(n-1), 1)。
-  默认只导出 .bin；追加 --json 时同时导出 .json。"
+Notes:
+    Default parameters: num_vertices=16, iterations=5.
+    The public portion keeps only x0=1 and the sparse support pattern; private inputs include sparse edge weights and the initial rank.
+    Demo private edge weights are derived from alpha=17/20 and a sampled adjacency matrix, and the row residual mass is distributed via uniform teleport.
+    The sparse support is sampled as a directed G(n, p) graph by default, without self-loops, with p=min(8/(n-1), 1).
+    By default only `.bin` is exported; append `--json` to also emit `.json`."
 }
 
 #[cfg(test)]
@@ -1164,7 +1166,7 @@ mod circuit_tests {
             &generated.circuit.r1cs,
             &page_rank_export_input_config(generated.circuit.r1cs.num_inputs),
         )
-        .expect("导出带输入元数据的 RMS 失败")
+        .expect("Failed to export RMS with input metadata")
         .with_output_witnesses(generated.circuit.output_witness_indices.clone());
 
         assert_eq!(export.num_public_inputs, 1);
