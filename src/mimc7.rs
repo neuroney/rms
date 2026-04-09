@@ -7,7 +7,7 @@ use crate::r1cs::{Constraint, LinComb, RmsLinearExport, Variable, R1CS};
 use crate::transform::{
     choudhuri_transform, eliminate_common_subexpressions_preserving_witnesses, TransformResult,
 };
-use crate::utils::{coeff_to_string, format_preview_list, print_constraints};
+use crate::utils::{coeff_to_string, print_constraints};
 use ark_bn254::Fr;
 use ark_ff::{Field, One};
 use std::str::FromStr;
@@ -281,7 +281,7 @@ pub fn export_circuit_with_options(
         &transformed.optimized,
         &ExportInputConfig::all_private(generated.circuit.r1cs.num_inputs),
     )?
-    .with_output_witnesses(generated.circuit.round_output_witness_indices.clone());
+    .with_output_witnesses(vec![*generated.circuit.round_output_witness_indices.last().unwrap()]);
 
     write_export_bundle_with_options(&generated.config.export_stem, &export, export_options)
 }
@@ -347,12 +347,8 @@ fn run_with_config(
         generated.circuit.lifted_input_witness
     );
     println!(
-        "  每轮输出 witness: {}",
-        format_preview_list(
-            &generated.circuit.round_output_witness_indices,
-            8,
-            |index| { format!("w{}", index) }
-        )
+        "  最终输出 witness: w{}",
+        generated.circuit.round_output_witness_indices.last().unwrap()
     );
     generated.circuit.r1cs.print_stats();
 
@@ -370,33 +366,21 @@ fn run_with_config(
     );
 
     println!("\n【3. Eval 一致性】");
+    let final_expected = generated.expected_round_outputs.last().unwrap();
+    let final_original = evaluation.original_round_outputs.last().unwrap();
+    let final_transformed = evaluation.transformed_round_outputs.last().unwrap();
     println!(
-        "  前 3 轮期望输出: {}",
-        format_preview_list(&evaluation.expected_round_outputs, 3, coeff_to_string)
+        "  期望最终输出: {}",
+        coeff_to_string(final_expected)
     );
     println!(
-        "  前 3 轮原始输出: {}",
-        format_preview_list(&evaluation.original_round_outputs, 3, coeff_to_string)
+        "  原始最终输出: {}",
+        coeff_to_string(final_original)
     );
     println!(
-        "  前 3 轮转换后输出: {}",
-        format_preview_list(&evaluation.transformed_round_outputs, 3, coeff_to_string)
+        "  转换后最终输出: {}",
+        coeff_to_string(final_transformed)
     );
-    let final_expected = evaluation
-        .expected_round_outputs
-        .last()
-        .ok_or_else(|| "MiMC7 至少需要 1 轮输出".to_string())?;
-    let final_original = evaluation
-        .original_round_outputs
-        .last()
-        .ok_or_else(|| "原始电路缺少最终输出".to_string())?;
-    let final_transformed = evaluation
-        .transformed_round_outputs
-        .last()
-        .ok_or_else(|| "转换后电路缺少最终输出".to_string())?;
-    println!("  最后一轮期望输出: {}", coeff_to_string(final_expected));
-    println!("  原始电路最后输出: {}", coeff_to_string(final_original));
-    println!("  转换后最后输出:   {}", coeff_to_string(final_transformed));
     println!(
         "  输出一致: {}  [约束满足: orig={}, rms+cse={}]",
         evaluation.outputs_match, evaluation.original_valid, evaluation.transformed_valid
@@ -536,7 +520,7 @@ mod tests {
             &ExportInputConfig::all_private(generated.circuit.r1cs.num_inputs),
         )
         .expect("export")
-        .with_output_witnesses(generated.circuit.round_output_witness_indices.clone());
+        .with_output_witnesses(vec![*generated.circuit.round_output_witness_indices.last().unwrap()]);
 
         assert_eq!(export.version, "rms-linear-v2");
         assert_eq!(export.num_inputs, 2);
@@ -547,7 +531,7 @@ mod tests {
         assert_eq!(export.private_inputs, vec![1]);
         assert_eq!(
             export.output_witnesses,
-            generated.circuit.round_output_witness_indices
+            vec![*generated.circuit.round_output_witness_indices.last().unwrap()]
         );
     }
 
