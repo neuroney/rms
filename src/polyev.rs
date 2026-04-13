@@ -1,4 +1,4 @@
-//! Dense multivariate polynomial compilation into RMS-compatible constraints.
+//! PolyEV multivariate polynomial compilation into RMS-compatible constraints.
 
 use crate::export::{
     build_rms_export, print_export_constraints_preview, split_export_cli_args,
@@ -27,14 +27,14 @@ pub struct RmsMultivariatePolynomial {
 }
 
 #[derive(Clone, Debug)]
-pub struct DensePolyRunConfig {
+pub struct PolyevRunConfig {
     pub num_vars: usize,
     pub max_degree: usize,
     pub seed: u64,
     pub export_stem: String,
 }
 
-impl DensePolyRunConfig {
+impl PolyevRunConfig {
     pub fn demo() -> Self {
         Self::new(DEFAULT_NUM_VARS, DEFAULT_MAX_DEGREE, DEFAULT_SEED)
     }
@@ -44,7 +44,7 @@ impl DensePolyRunConfig {
             num_vars,
             max_degree,
             seed,
-            export_stem: format!("data/dense_poly_n{}_d{}", num_vars, max_degree),
+            export_stem: format!("data/polyev_n{}_d{}", num_vars, max_degree),
         }
     }
 }
@@ -178,15 +178,12 @@ impl RmsCompiler {
             self.constraints,
             &ExportInputConfig::all_private(self.num_inputs),
         )
-        .expect("dense poly export should be valid")
+        .expect("PolyEV export should be valid")
     }
 }
 
 fn term_from_i64(index: usize, coeff: i64) -> Term {
-    Term {
-        index,
-        coeff: coeff.to_string(),
-    }
+    Term::from_i64(index, coeff)
 }
 
 fn collect_coeff_slices(
@@ -308,7 +305,7 @@ pub fn sample_full_multivariate_poly<R: Rng>(
 }
 
 pub fn run() {
-    run_with_args(&[]).expect("Dense polynomial example failed");
+    run_with_args(&[]).expect("PolyEV example failed");
 }
 
 pub fn run_with_args(args: &[String]) -> Result<(), String> {
@@ -321,8 +318,8 @@ pub fn run_with_args(args: &[String]) -> Result<(), String> {
 
     let (args, export_options) = split_export_cli_args(args);
     let config = match args.as_slice() {
-        [] => DensePolyRunConfig::demo(),
-        [num_vars, max_degree] => DensePolyRunConfig::new(
+        [] => PolyevRunConfig::demo(),
+        [num_vars, max_degree] => PolyevRunConfig::new(
             parse_usize_arg("num_vars", num_vars)?,
             parse_usize_arg("degree", max_degree)?,
             DEFAULT_SEED,
@@ -334,19 +331,19 @@ pub fn run_with_args(args: &[String]) -> Result<(), String> {
 }
 
 fn run_with_config(
-    config: DensePolyRunConfig,
+    config: PolyevRunConfig,
     export_options: ExportBundleOptions,
 ) -> Result<(), String> {
     let mut rng = StdRng::seed_from_u64(config.seed);
     let poly = sample_full_multivariate_poly(config.num_vars, config.max_degree, &mut rng)
-        .map_err(|err| format!("Failed to generate dense polynomial: {err}"))?;
+        .map_err(|err| format!("Failed to generate PolyEV polynomial: {err}"))?;
     let coeff_count = poly.terms.len();
     let (export, output_witness) = compile_poly_to_rms_horner(&poly);
     let report = write_export_bundle_with_options(&config.export_stem, &export, export_options)
-        .map_err(|err| format!("Failed to export dense polynomial RMS circuit: {err}"))?;
+        .map_err(|err| format!("Failed to export PolyEV polynomial RMS circuit: {err}"))?;
 
     println!("\n╔══════════════════════════════════════════════════╗");
-    println!("║  Dense Polynomial: Horner-compiled to an RMS linear circuit ║");
+    println!("║  PolyEV Polynomial: Horner-compiled to an RMS linear circuit ║");
     println!("╚══════════════════════════════════════════════════╝\n");
     println!("  Variable count: {}", config.num_vars);
     println!("  Maximum degree: {}", config.max_degree);
@@ -376,13 +373,13 @@ fn parse_usize_arg(name: &str, raw: &str) -> Result<usize, String> {
 fn usage_text() -> &'static str {
     "\
 Usage:
-  cargo run -- dense_poly [--json]
-  cargo run -- dense_poly <num_vars> <degree> [--json]
-  cargo run --example dense_poly -- <num_vars> <degree> [--json]
+  cargo run -- polyev [--json]
+  cargo run -- polyev <num_vars> <degree> [--json]
+  cargo run --example polyev -- <num_vars> <degree> [--json]
 
 Notes:
     Default: num_vars=5, degree=4.
-    By default only `.bin` is exported; append `--json` to also emit `.json`."
+    By default only `.bin` is exported; `.bin` contains a zstd-compressed `rms-linear-v3` payload. Append `--json` to also emit `.json`."
 }
 
 #[cfg(test)]
@@ -410,7 +407,7 @@ mod tests {
         };
 
         let (export, output_witness) = compile_poly_to_rms_horner(&poly);
-        assert_eq!(export.version, "rms-linear-v2");
+        assert_eq!(export.version, "rms-linear-v3");
         assert!(export.num_inputs >= 3);
         assert_eq!(export.num_public_inputs, 1);
         assert_eq!(export.public_inputs[0].index, 0);

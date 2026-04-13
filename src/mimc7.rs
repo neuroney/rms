@@ -84,14 +84,13 @@ impl Mimc7RunConfig {
 
 pub fn available_round_constants() -> Result<Vec<Fr>, String> {
     let marker = "var c[91] = [";
-    let start = MIMC7_FIXTURE_SOURCE
-        .find(marker)
-        .ok_or_else(|| "Could not find the MiMC7 round constants definition in the fixture".to_string())?
-        + marker.len();
+    let start = MIMC7_FIXTURE_SOURCE.find(marker).ok_or_else(|| {
+        "Could not find the MiMC7 round constants definition in the fixture".to_string()
+    })? + marker.len();
     let tail = &MIMC7_FIXTURE_SOURCE[start..];
-    let end = tail
-        .find("];")
-        .ok_or_else(|| "MiMC7 round constants definition is missing the closing `];`".to_string())?;
+    let end = tail.find("];").ok_or_else(|| {
+        "MiMC7 round constants definition is missing the closing `];`".to_string()
+    })?;
     let body = &tail[..end];
 
     let constants = body
@@ -283,7 +282,11 @@ pub fn export_circuit_with_options(
         &transformed.optimized,
         &ExportInputConfig::all_private(generated.circuit.r1cs.num_inputs),
     )?
-    .with_output_witnesses(vec![*generated.circuit.round_output_witness_indices.last().unwrap()]);
+    .with_output_witnesses(vec![*generated
+        .circuit
+        .round_output_witness_indices
+        .last()
+        .unwrap()]);
 
     write_export_bundle_with_options(&generated.config.export_stem, &export, export_options)
 }
@@ -350,7 +353,11 @@ fn run_with_config(
     );
     println!(
         "  Per-round output witnesses: {}",
-        generated.circuit.round_output_witness_indices.last().unwrap()
+        generated
+            .circuit
+            .round_output_witness_indices
+            .last()
+            .unwrap()
     );
     generated.circuit.r1cs.print_stats();
 
@@ -360,7 +367,10 @@ fn run_with_config(
         "  Choudhuri blowup factor: {:.2}x",
         transformed.transformed.blowup_factor
     );
-    println!("  CSE eliminated duplicate constraints: {}", transformed.eliminated);
+    println!(
+        "  CSE eliminated duplicate constraints: {}",
+        transformed.eliminated
+    );
     println!(
         "  Final blowup factor: {:.2}x",
         transformed.optimized.constraints.len() as f64
@@ -399,7 +409,8 @@ fn run_with_config(
         println!("  JSON/BIN contents match: {}", json_bin_match);
     }
     println!("  First 8 final RMS constraints:");
-    let exported_bin = load_r1cs_from_bin(&export.bin_path).expect("Failed to read BIN export file");
+    let exported_bin =
+        load_r1cs_from_bin(&export.bin_path).expect("Failed to read BIN export file");
     for constraint in exported_bin.constraints.iter().take(8) {
         println!(
             "    step {:>2}: ({} ) * ({} ) -> w{}",
@@ -455,7 +466,7 @@ Usage:
 
 Notes:
     Hand-written recursive MiMC7: each round applies x <- (x + k_i)^7, then the final RMS artifact is transformed and exported.
-    By default only `.bin` is exported; append `--json` to also emit `.json`."
+    By default only `.bin` is exported; `.bin` contains a zstd-compressed `rms-linear-v3` payload. Append `--json` to also emit `.json`."
 }
 
 fn read_output_vector(output_witnesses: &[usize], assignment: &Assignment) -> Vec<Fr> {
@@ -522,9 +533,13 @@ mod tests {
             &ExportInputConfig::all_private(generated.circuit.r1cs.num_inputs),
         )
         .expect("export")
-        .with_output_witnesses(vec![*generated.circuit.round_output_witness_indices.last().unwrap()]);
+        .with_output_witnesses(vec![*generated
+            .circuit
+            .round_output_witness_indices
+            .last()
+            .unwrap()]);
 
-        assert_eq!(export.version, "rms-linear-v2");
+        assert_eq!(export.version, "rms-linear-v3");
         assert_eq!(export.num_inputs, 2);
         assert_eq!(export.num_public_inputs, 1);
         assert_eq!(export.public_inputs[0].index, 0);
@@ -533,7 +548,11 @@ mod tests {
         assert_eq!(export.private_inputs, vec![1]);
         assert_eq!(
             export.output_witnesses,
-            vec![*generated.circuit.round_output_witness_indices.last().unwrap()]
+            vec![*generated
+                .circuit
+                .round_output_witness_indices
+                .last()
+                .unwrap()]
         );
     }
 

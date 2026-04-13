@@ -1,24 +1,38 @@
 #!/usr/bin/env python3
 """Analyze RMS export artifacts from `.bin` or `.json`.
 
-The current repository exports `RmsLinearExport` with `bincode` v1.3 using
-fixed-width little-endian integers on 64-bit targets. This script parses the
-export in a streaming way so large `.bin` files do not need to be fully loaded
-into memory.
+Binary exports are zstd-compressed `rms-linear-v3` payloads. The analyzer keeps
+the original streaming behavior: it decompresses and parses the binary format
+incrementally so large artifacts do not need to be fully materialized in memory.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import shutil
 import struct
+import subprocess
 import sys
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import BinaryIO
+from typing import BinaryIO, Iterator
 
 
-U64 = struct.Struct("<Q")
+MAGIC = b"RMS3"
+U32 = struct.Struct("<I")
+FIELD_BYTES = 32
+
+PRIVATE_INPUTS_EXPLICIT = 0
+PRIVATE_INPUTS_RANGE = 1
+PRIVATE_INPUTS_BITSET = 2
+
+EXECUTION_ORDER_SEQUENTIAL = 0
+EXECUTION_ORDER_EXPLICIT = 1
+
+CONSTRAINT_INDEX_SEQUENTIAL = 0
+CONSTRAINT_INDEX_EXPLICIT = 1
 
 
 class DecodeError(RuntimeError):
@@ -35,18 +49,48 @@ class BinReader:
             raise DecodeError(f"unexpected EOF while reading {size} bytes")
         return data
 
-    def read_u64(self) -> int:
-        return U64.unpack(self.read_exact(U64.size))[0]
+    def read_u8(self) -> int:
+        return self.read_exact(1)[0]
 
-    def read_string(self) -> str:
-        size = self.read_u64()
-        return self.read_exact(size).decode("utf-8")
+    def read_u32(self) -> int:
+        return U32.unpack(self.read_exact(U32.size))[0]
 
-    def skip_usize_vec(self) -> int:
-        count = self.read_u64()
-        for _ in range(count):
-            self.read_u64()
-        return count
+    def read_field_is_nonzero(self) -> bool:
+        return any(self.read_exact(FIELD_BYTES))
+
+
+@contextmanager
+def open_zstd_stream(path: Path) -> Iterator[BinaryIO]:
+    try:
+        import zstandard as zstd  # type: ignore
+    except ImportError:
+        zstd_bin = shutil.which("zstd")
+        if zstd_bin is None:
+            raise DecodeError(
+                "zstd support unavailable; install python-zstandard or make the `zstd` CLI available"
+            )
+
+        process = subprocess.Popen(
+            [zstd_bin, "-d", "-q", "-c", str(path)],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        assert process.stdout is not None
+        assert process.stderr is not None
+        try:
+            yield process.stdout
+        finally:
+            process.stdout.close()
+            stderr = process.stderr.read().decode("utf-8", errors="replace").strip()
+            process.stderr.close()
+            return_code = process.wait()
+            if return_code != 0:
+                raise DecodeError(stderr or f"zstd exited with status {return_code}")
+    else:
+        with path.open("rb") as compressed:
+            decompressor = zstd.ZstdDecompressor()
+            with decompressor.stream_reader(compressed) as stream:
+                yield stream
 
 
 @dataclass
@@ -132,6 +176,9 @@ class ExportSummary:
     private_input_slots: list[int]
     num_witnesses: int
     execution_order_len: int
+    private_inputs_encoding: str
+    execution_order_encoding: str
+    constraint_index_encoding: str
     constraint_stats: ConstraintStats
 
     @property
@@ -152,68 +199,122 @@ class ExportSummary:
             },
             "witnesses": self.num_witnesses,
             "execution_order_len": self.execution_order_len,
+            "encodings": {
+                "private_inputs": self.private_inputs_encoding,
+                "execution_order": self.execution_order_encoding,
+                "constraint_indices": self.constraint_index_encoding,
+            },
             **self.constraint_stats.as_dict(),
         }
 
 
-def read_term(reader: BinReader) -> tuple[int, str]:
-    index = reader.read_u64()
-    coeff = reader.read_string()
-    return index, coeff
+def read_term(reader: BinReader) -> tuple[int, bool]:
+    index = reader.read_u32()
+    nonzero = reader.read_field_is_nonzero()
+    return index, nonzero
 
 
 def skip_term_vec(reader: BinReader) -> tuple[set[int], int]:
-    count = reader.read_u64()
+    count = reader.read_u32()
     active_indices: set[int] = set()
     width = 0
     for _ in range(count):
-        index, coeff = read_term(reader)
-        if coeff != "0":
+        index, nonzero = read_term(reader)
+        if nonzero:
             active_indices.add(index)
             width += 1
     return active_indices, width
 
 
-def summarize_v2_bin(path: Path) -> ExportSummary:
-    with path.open("rb") as fh:
+def read_private_inputs(
+    reader: BinReader, layout: int, count: int, num_inputs: int
+) -> tuple[list[int], str]:
+    if layout == PRIVATE_INPUTS_EXPLICIT:
+        return [reader.read_u32() for _ in range(count)], "explicit"
+
+    if layout == PRIVATE_INPUTS_RANGE:
+        if count == 0:
+            return [], "range"
+        start = reader.read_u32()
+        return list(range(start, start + count)), "range"
+
+    if layout == PRIVATE_INPUTS_BITSET:
+        bitset = reader.read_exact((num_inputs + 7) // 8)
+        indices = [
+            index
+            for index in range(num_inputs)
+            if (bitset[index // 8] >> (index % 8)) & 1 == 1
+        ]
+        return indices, "bitset"
+
+    raise DecodeError(f"unsupported private input encoding tag {layout}")
+
+
+def summarize_v3_bin(path: Path) -> ExportSummary:
+    with open_zstd_stream(path) as fh:
         reader = BinReader(fh)
-        version = reader.read_string()
-        if version != "rms-linear-v2":
-            raise DecodeError(f"unsupported RMS version {version!r}")
+        magic = reader.read_exact(len(MAGIC))
+        if magic != MAGIC:
+            raise DecodeError(f"unexpected RMS binary magic {magic!r}")
 
-        num_inputs = reader.read_u64()
-        num_public_inputs = reader.read_u64()
-        num_private_inputs = reader.read_u64()
+        num_inputs = reader.read_u32()
+        num_witnesses = reader.read_u32()
 
-        public_inputs_len = reader.read_u64()
-        public_input_slots: list[int] = []
+        public_inputs_len = reader.read_u32()
+        public_input_slots = []
         for _ in range(public_inputs_len):
-            index = reader.read_u64()
-            _ = reader.read_string()
-            public_input_slots.append(index)
+            public_input_slots.append(reader.read_u32())
+            reader.read_exact(FIELD_BYTES)
 
-        private_inputs_len = reader.read_u64()
-        private_input_slots = [reader.read_u64() for _ in range(private_inputs_len)]
+        private_layout = reader.read_u8()
+        num_private_inputs = reader.read_u32()
+        private_input_slots, private_encoding = read_private_inputs(
+            reader, private_layout, num_private_inputs, num_inputs
+        )
 
-        num_witnesses = reader.read_u64()
-        execution_order_len = reader.skip_usize_vec()
-        constraint_count = reader.read_u64()
+        output_witnesses_len = reader.read_u32()
+        for _ in range(output_witnesses_len):
+            reader.read_u32()
+
+        constraint_count = reader.read_u32()
+
+        execution_layout = reader.read_u8()
+        if execution_layout == EXECUTION_ORDER_SEQUENTIAL:
+            execution_order_len = constraint_count
+            execution_encoding = "sequential"
+        elif execution_layout == EXECUTION_ORDER_EXPLICIT:
+            execution_order_len = reader.read_u32()
+            for _ in range(execution_order_len):
+                reader.read_u32()
+            execution_encoding = "explicit"
+        else:
+            raise DecodeError(f"unsupported execution order encoding tag {execution_layout}")
+
+        constraint_index_layout = reader.read_u8()
+        if constraint_index_layout == CONSTRAINT_INDEX_SEQUENTIAL:
+            constraint_index_encoding = "implicit-sequential"
+        elif constraint_index_layout == CONSTRAINT_INDEX_EXPLICIT:
+            constraint_index_encoding = "explicit"
+        else:
+            raise DecodeError(
+                f"unsupported constraint index encoding tag {constraint_index_layout}"
+            )
 
         stats = ConstraintStats()
         public_input_set = set(public_input_slots)
         private_input_set = set(private_input_slots)
 
-        for _ in range(constraint_count):
-            _ = reader.read_u64()  # constraint index
+        for constraint_index in range(constraint_count):
+            if constraint_index_layout == CONSTRAINT_INDEX_EXPLICIT:
+                _ = reader.read_u32()
+            else:
+                _ = constraint_index
+
             a_indices, _ = skip_term_vec(reader)
             _, b_width = skip_term_vec(reader)
-            _ = reader.read_u64()  # output witness
+            _ = reader.read_u32()
             stats.ingest_constraint(a_indices, b_width, public_input_set, private_input_set)
 
-        if num_public_inputs != len(public_input_slots):
-            raise DecodeError(
-                f"header/public_inputs mismatch: {num_public_inputs} != {len(public_input_slots)}"
-            )
         if num_private_inputs != len(private_input_slots):
             raise DecodeError(
                 f"header/private_inputs mismatch: {num_private_inputs} != {len(private_input_slots)}"
@@ -221,43 +322,7 @@ def summarize_v2_bin(path: Path) -> ExportSummary:
 
         return ExportSummary(
             path=str(path),
-            version=version,
-            num_inputs=num_inputs,
-            num_public_inputs=num_public_inputs,
-            num_private_inputs=num_private_inputs,
-            public_input_slots=public_input_slots,
-            private_input_slots=private_input_slots,
-            num_witnesses=num_witnesses,
-            execution_order_len=execution_order_len,
-            constraint_stats=stats,
-        )
-
-
-def summarize_v1_bin(path: Path) -> ExportSummary:
-    with path.open("rb") as fh:
-        reader = BinReader(fh)
-        version = reader.read_string()
-        num_inputs = reader.read_u64()
-        num_witnesses = reader.read_u64()
-        execution_order_len = reader.skip_usize_vec()
-        constraint_count = reader.read_u64()
-
-        public_input_slots = [0] if num_inputs > 0 else []
-        private_input_slots = list(range(1, num_inputs))
-        public_input_set = set(public_input_slots)
-        private_input_set = set(private_input_slots)
-
-        stats = ConstraintStats()
-        for _ in range(constraint_count):
-            _ = reader.read_u64()  # constraint index
-            a_indices, _ = skip_term_vec(reader)
-            _, b_width = skip_term_vec(reader)
-            _ = reader.read_u64()  # output witness
-            stats.ingest_constraint(a_indices, b_width, public_input_set, private_input_set)
-
-        return ExportSummary(
-            path=str(path),
-            version=version,
+            version="rms-linear-v3",
             num_inputs=num_inputs,
             num_public_inputs=len(public_input_slots),
             num_private_inputs=len(private_input_slots),
@@ -265,6 +330,9 @@ def summarize_v1_bin(path: Path) -> ExportSummary:
             private_input_slots=private_input_slots,
             num_witnesses=num_witnesses,
             execution_order_len=execution_order_len,
+            private_inputs_encoding=private_encoding,
+            execution_order_encoding=execution_encoding,
+            constraint_index_encoding=constraint_index_encoding,
             constraint_stats=stats,
         )
 
@@ -274,22 +342,16 @@ def summarize_json_export(path: Path) -> ExportSummary:
         data = json.load(fh)
 
     version = data["version"]
-    num_inputs = int(data["num_inputs"])
+    if version != "rms-linear-v3":
+        raise DecodeError(f"unsupported JSON export version {version!r}")
 
-    if version == "rms-linear-v2":
-        public_input_slots = [int(item["index"]) for item in data.get("public_inputs", [])]
-        private_input_slots = [int(index) for index in data.get("private_inputs", [])]
-        num_public_inputs = int(data.get("num_public_inputs", len(public_input_slots)))
-        num_private_inputs = int(data.get("num_private_inputs", len(private_input_slots)))
-        num_witnesses = int(data["num_witnesses"])
-        execution_order_len = len(data.get("execution_order", []))
-    else:
-        public_input_slots = [0] if num_inputs > 0 else []
-        private_input_slots = list(range(1, num_inputs))
-        num_public_inputs = len(public_input_slots)
-        num_private_inputs = len(private_input_slots)
-        num_witnesses = int(data["num_witnesses"])
-        execution_order_len = len(data.get("execution_order", []))
+    num_inputs = int(data["num_inputs"])
+    public_input_slots = [int(item["index"]) for item in data.get("public_inputs", [])]
+    private_input_slots = [int(index) for index in data.get("private_inputs", [])]
+    num_public_inputs = int(data.get("num_public_inputs", len(public_input_slots)))
+    num_private_inputs = int(data.get("num_private_inputs", len(private_input_slots)))
+    num_witnesses = int(data["num_witnesses"])
+    execution_order = data.get("execution_order", [])
 
     public_input_set = set(public_input_slots)
     private_input_set = set(private_input_slots)
@@ -313,7 +375,10 @@ def summarize_json_export(path: Path) -> ExportSummary:
         public_input_slots=public_input_slots,
         private_input_slots=private_input_slots,
         num_witnesses=num_witnesses,
-        execution_order_len=execution_order_len,
+        execution_order_len=len(execution_order),
+        private_inputs_encoding="json-list",
+        execution_order_encoding="json-list",
+        constraint_index_encoding="json-inline",
         constraint_stats=stats,
     )
 
@@ -321,15 +386,7 @@ def summarize_json_export(path: Path) -> ExportSummary:
 def summarize_export(path: Path) -> ExportSummary:
     if path.suffix == ".json":
         return summarize_json_export(path)
-
-    with path.open("rb") as fh:
-        reader = BinReader(fh)
-        version = reader.read_string()
-
-    if version == "rms-linear-v2":
-        return summarize_v2_bin(path)
-
-    return summarize_v1_bin(path)
+    return summarize_v3_bin(path)
 
 
 def format_percent(count: int, total: int) -> str:
@@ -355,6 +412,11 @@ def print_human_summary(summary: ExportSummary) -> None:
     print(f"  witnesses:                {summary.num_witnesses}")
     print(f"  execution order len:      {summary.execution_order_len}")
     print(f"  total constraints:        {total}")
+    print()
+    print("Encodings")
+    print(f"  private inputs:           {summary.private_inputs_encoding}")
+    print(f"  execution order:          {summary.execution_order_encoding}")
+    print(f"  constraint indices:       {summary.constraint_index_encoding}")
     print()
     print("Constraint Classes (input side × memory side)")
     print(

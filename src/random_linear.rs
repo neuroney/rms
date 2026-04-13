@@ -76,10 +76,7 @@ fn sample_input_linear_combo<R: Rng>(rng: &mut R, num_inputs: usize) -> Vec<Term
 
     indices
         .into_iter()
-        .map(|index| Term {
-            index,
-            coeff: sample_coeff(rng).to_string(),
-        })
+        .map(|index| Term::from_i64(index, sample_coeff(rng)))
         .collect()
 }
 
@@ -89,10 +86,7 @@ fn sample_witness_linear_combo<R: Rng>(rng: &mut R, max_existing_witness: usize)
 
     indices
         .into_iter()
-        .map(|index| Term {
-            index,
-            coeff: sample_coeff(rng).to_string(),
-        })
+        .map(|index| Term::from_i64(index, sample_coeff(rng)))
         .collect()
 }
 
@@ -203,7 +197,7 @@ Usage:
 
 Notes:
     Default: num_inputs=5, num_constraints=64.
-    By default only `.bin` is exported; append `--json` to also emit `.json`."
+    By default only `.bin` is exported; `.bin` contains a zstd-compressed `rms-linear-v3` payload. Append `--json` to also emit `.json`."
 }
 
 #[cfg(test)]
@@ -215,7 +209,7 @@ mod tests {
         let mut rng = StdRng::seed_from_u64(7);
         let export = build_random_rms_linear(4, 6, &mut rng).expect("linear export");
 
-        assert_eq!(export.version, "rms-linear-v2");
+        assert_eq!(export.version, "rms-linear-v3");
         assert_eq!(export.num_inputs, 4);
         assert_eq!(export.num_witnesses, 7);
         assert_eq!(export.execution_order, vec![0, 1, 2, 3, 4, 5]);

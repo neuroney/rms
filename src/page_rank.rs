@@ -175,8 +175,14 @@ impl PageRankRunConfig {
 }
 
 pub fn generate_page_rank_r1cs(compiled: &CompiledPageRank) -> PageRankCircuit {
-    assert!(compiled.num_vertices > 0, "PageRank vertex count must be greater than 0");
-    assert!(compiled.iterations > 0, "PageRank iteration count must be greater than 0");
+    assert!(
+        compiled.num_vertices > 0,
+        "PageRank vertex count must be greater than 0"
+    );
+    assert!(
+        compiled.iterations > 0,
+        "PageRank iteration count must be greater than 0"
+    );
 
     let num_inputs =
         FIRST_EXTERNAL_INPUT_INDEX + compiled.edge_weights.len() + compiled.num_vertices;
@@ -465,7 +471,10 @@ fn run_with_config(
 
     println!("[1. Circuit generation]");
     println!("  Vertex count: {}", generated.compiled.num_vertices);
-    println!("  Sparse edge count: {}", generated.compiled.edge_weights.len());
+    println!(
+        "  Sparse edge count: {}",
+        generated.compiled.edge_weights.len()
+    );
     println!(
         "  Average public out-degree: {:.2}",
         average_out_degree(&generated.compiled.out_degrees)
@@ -500,7 +509,10 @@ fn run_with_config(
         "  Choudhuri blowup factor: {:.2}x",
         transformed.transformed.blowup_factor
     );
-    println!("  CSE eliminated duplicate constraints: {}", transformed.eliminated);
+    println!(
+        "  CSE eliminated duplicate constraints: {}",
+        transformed.eliminated
+    );
     println!(
         "  Final blowup factor: {:.2}x",
         transformed.optimized.constraints.len() as f64
@@ -528,7 +540,8 @@ fn run_with_config(
         println!("  JSON/BIN contents match: {}", json_bin_match);
     }
     println!("  First 8 final RMS constraints:");
-    let exported_bin = load_r1cs_from_bin(&export.bin_path).expect("Failed to read BIN export file");
+    let exported_bin =
+        load_r1cs_from_bin(&export.bin_path).expect("Failed to read BIN export file");
     for constraint in exported_bin.constraints.iter().take(8) {
         println!(
             "    step {:>2}: ({} ) * ({} ) -> w{}",
@@ -560,7 +573,10 @@ fn run_with_config(
 
 fn validate_config(config: &PageRankRunConfig) {
     assert!(config.num_vertices > 0, "PageRank graph cannot be empty");
-    assert!(config.iterations > 0, "PageRank iteration count must be greater than 0");
+    assert!(
+        config.iterations > 0,
+        "PageRank iteration count must be greater than 0"
+    );
     assert_eq!(
         config.initial_rank.len(),
         config.num_vertices,
@@ -1025,7 +1041,9 @@ fn fr_fraction(num: u64, den: u64) -> Fr {
 }
 
 fn fr_inverse_u64(value: u64) -> Fr {
-    Fr::from(value).inverse().expect("Denominator must be invertible in the current field")
+    Fr::from(value)
+        .inverse()
+        .expect("Denominator must be invertible in the current field")
 }
 
 fn usage_text() -> &'static str {
@@ -1040,7 +1058,7 @@ Notes:
     The public portion keeps only x0=1 and the sparse support pattern; private inputs include sparse edge weights and the initial rank.
     Demo private edge weights are derived from alpha=17/20 and a sampled adjacency matrix, and the row residual mass is distributed via uniform teleport.
     The sparse support is sampled as a directed G(n, p) graph by default, without self-loops, with p=min(8/(n-1), 1).
-    By default only `.bin` is exported; append `--json` to also emit `.json`."
+    By default only `.bin` is exported; `.bin` contains a zstd-compressed `rms-linear-v3` payload. Append `--json` to also emit `.json`."
 }
 
 #[cfg(test)]

@@ -4,11 +4,13 @@ use crate::r1cs::{Constraint, LinComb, Variable, R1CS};
 use crate::utils::{lincomb_to_string, var_to_string};
 use ark_bn254::Fr;
 use ark_ff::{One, Zero};
+use rayon::prelude::*;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
 
 const DEFAULT_MAX_BLOWUP_FACTOR: usize = 512_000_000_000;
 const DEFAULT_MAX_TRANSFORMED_CONSTRAINTS: usize = 1_000_000_000_000;
+const PARALLEL_INPUT_LIFT_THRESHOLD: usize = 1_024;
 
 #[derive(Clone, Debug)]
 pub struct TransformResult {
@@ -451,16 +453,36 @@ fn lower_input_input_constraint(
 }
 
 fn count_input_lift_uses(r1cs: &R1CS) -> HashMap<String, usize> {
-    let mut counts = HashMap::new();
+    // The core Choudhuri transform stays sequential because helper-witness allocation,
+    // cache insertion, and alias rewriting are order-sensitive. This counting pre-pass is
+    // read-only, so it is the safe place to use Rayon on large inputs.
+    if r1cs.constraints.len() < PARALLEL_INPUT_LIFT_THRESHOLD {
+        let mut counts = HashMap::new();
 
-    for constraint in &r1cs.constraints {
-        if constraint.is_input_input() {
-            *counts.entry(lincomb_to_string(&constraint.a)).or_insert(0) += 1;
-            *counts.entry(lincomb_to_string(&constraint.b)).or_insert(0) += 1;
+        for constraint in &r1cs.constraints {
+            if constraint.is_input_input() {
+                *counts.entry(lincomb_to_string(&constraint.a)).or_insert(0) += 1;
+                *counts.entry(lincomb_to_string(&constraint.b)).or_insert(0) += 1;
+            }
         }
+
+        return counts;
     }
 
-    counts
+    r1cs.constraints
+        .par_iter()
+        .filter(|constraint| constraint.is_input_input())
+        .fold(HashMap::new, |mut counts, constraint| {
+            *counts.entry(lincomb_to_string(&constraint.a)).or_insert(0) += 1;
+            *counts.entry(lincomb_to_string(&constraint.b)).or_insert(0) += 1;
+            counts
+        })
+        .reduce(HashMap::new, |mut left, right| {
+            for (key, value) in right {
+                *left.entry(key).or_insert(0) += value;
+            }
+            left
+        })
 }
 
 fn prefer_left_lift(

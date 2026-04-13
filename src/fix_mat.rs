@@ -158,7 +158,12 @@ pub fn generate_fix_mat_r1cs(matrix_values: &[Vec<u64>]) -> FixMatCircuit {
 }
 
 pub fn generate_circuit(config: FixMatRunConfig) -> GeneratedFixMat {
-    validate_matrix_shape(&config.matrix_values, config.dim, config.dim, "fixed matrix M");
+    validate_matrix_shape(
+        &config.matrix_values,
+        config.dim,
+        config.dim,
+        "fixed matrix M",
+    );
     validate_vector_shape(&config.vector_values, config.dim, "private vector A");
 
     let circuit = generate_fix_mat_r1cs(&config.matrix_values);
@@ -292,7 +297,10 @@ fn run_with_config(
         "  Choudhuri blowup factor: {:.2}x",
         transformed.transformed.blowup_factor
     );
-    println!("  CSE eliminated duplicate constraints: {}", transformed.eliminated);
+    println!(
+        "  CSE eliminated duplicate constraints: {}",
+        transformed.eliminated
+    );
     println!(
         "  Final blowup factor: {:.2}x",
         transformed.optimized.constraints.len() as f64
@@ -326,7 +334,8 @@ fn run_with_config(
         println!("  JSON/BIN contents match: {}", json_bin_match);
     }
     println!("  First 5 final RMS constraints:");
-    let exported_bin = load_r1cs_from_bin(&export.bin_path).expect("Failed to read BIN export file");
+    let exported_bin =
+        load_r1cs_from_bin(&export.bin_path).expect("Failed to read BIN export file");
     for constraint in exported_bin.constraints.iter().take(5) {
         println!(
             "    step {:>2}: ({} ) * ({} ) -> w{}",
@@ -420,14 +429,20 @@ fn validate_vector_shape(vector: &[u64], dim: usize, name: &str) {
 fn read_output_vector(output_witnesses: &[usize], assignment: &Assignment) -> Vec<u64> {
     output_witnesses
         .iter()
-        .map(|witness_idx| fr_to_u64(&assignment.witnesses[witness_idx]).expect("Vector output exceeds u64"))
+        .map(|witness_idx| {
+            fr_to_u64(&assignment.witnesses[witness_idx]).expect("Vector output exceeds u64")
+        })
         .collect()
 }
 
 fn multiply_matrix_vector(matrix: &[Vec<u64>], vector: &[u64]) -> Vec<u64> {
     let dim = matrix.len();
     assert!(dim > 0, "Matrix cannot be empty");
-    assert_eq!(vector.len(), dim, "Matrix and vector dimensions do not match");
+    assert_eq!(
+        vector.len(),
+        dim,
+        "Matrix and vector dimensions do not match"
+    );
     validate_matrix_shape(matrix, dim, dim, "fixed matrix M");
 
     let mut result = vec![0u64; dim];
@@ -468,7 +483,7 @@ Usage:
 Notes:
     Default: 4x4 fixed matrix times a 4-dimensional private vector.
     The public fixed matrix M is written into the constraints at setup time; the private input only contains vector A.
-    By default only `.bin` is exported; append `--json` to also emit `.json`."
+    By default only `.bin` is exported; `.bin` contains a zstd-compressed `rms-linear-v3` payload. Append `--json` to also emit `.json`."
 }
 
 #[cfg(test)]

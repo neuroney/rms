@@ -151,8 +151,18 @@ pub fn generate_two_mat_r1cs(dim: usize) -> TwoMatCircuit {
 }
 
 pub fn generate_circuit(config: TwoMatRunConfig) -> GeneratedTwoMat {
-    validate_matrix_shape(&config.left_values, config.dim, config.dim, "left matrix M1");
-    validate_matrix_shape(&config.right_values, config.dim, config.dim, "right matrix M2");
+    validate_matrix_shape(
+        &config.left_values,
+        config.dim,
+        config.dim,
+        "left matrix M1",
+    );
+    validate_matrix_shape(
+        &config.right_values,
+        config.dim,
+        config.dim,
+        "right matrix M2",
+    );
 
     let circuit = generate_two_mat_r1cs(config.dim);
     let input_assignment = build_matrix_inputs(
@@ -296,7 +306,10 @@ fn run_with_config(
         "  Choudhuri blowup factor: {:.2}x",
         transformed.transformed.blowup_factor
     );
-    println!("  CSE eliminated duplicate constraints: {}", transformed.eliminated);
+    println!(
+        "  CSE eliminated duplicate constraints: {}",
+        transformed.eliminated
+    );
     println!(
         "  Final blowup factor: {:.2}x",
         transformed.optimized.constraints.len() as f64
@@ -329,7 +342,8 @@ fn run_with_config(
         println!("  JSON/BIN contents match: {}", json_bin_match);
     }
     println!("  First 5 final RMS constraints:");
-    let exported_bin = load_r1cs_from_bin(&export.bin_path).expect("Failed to read BIN export file");
+    let exported_bin =
+        load_r1cs_from_bin(&export.bin_path).expect("Failed to read BIN export file");
     for constraint in exported_bin.constraints.iter().take(5) {
         println!(
             "    step {:>2}: ({} ) * ({} ) -> w{}",
@@ -419,7 +433,8 @@ fn read_output_matrix(output_witnesses: &[Vec<usize>], assignment: &Assignment) 
         .map(|row| {
             row.iter()
                 .map(|witness_idx| {
-                    fr_to_u64(&assignment.witnesses[witness_idx]).expect("Matrix output exceeds u64")
+                    fr_to_u64(&assignment.witnesses[witness_idx])
+                        .expect("Matrix output exceeds u64")
                 })
                 .collect()
         })
@@ -466,7 +481,7 @@ Usage:
 Notes:
     Default: 4x4 times 4x4.
     Both operands M1 and M2 are private n x n matrix inputs.
-    By default only `.bin` is exported; append `--json` to also emit `.json`."
+    By default only `.bin` is exported; `.bin` contains a zstd-compressed `rms-linear-v3` payload. Append `--json` to also emit `.json`."
 }
 
 #[cfg(test)]

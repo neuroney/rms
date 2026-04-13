@@ -57,14 +57,8 @@ pub fn build_random_rms<R: Rng>(
 
         constraints.push(ExportConstraint {
             index,
-            a_in: vec![Term {
-                index: input_idx,
-                coeff: "1".to_string(),
-            }],
-            b_wit: vec![Term {
-                index: witness_in,
-                coeff: "1".to_string(),
-            }],
+            a_in: vec![Term::from_i64(input_idx, 1)],
+            b_wit: vec![Term::from_i64(witness_in, 1)],
             output_witness: witness_out,
         });
     }
@@ -148,7 +142,7 @@ Usage:
 
 Notes:
     Default: num_inputs=5, num_constraints=64.
-    By default only `.bin` is exported; append `--json` to also emit `.json`."
+    By default only `.bin` is exported; `.bin` contains a zstd-compressed `rms-linear-v3` payload. Append `--json` to also emit `.json`."
 }
 
 #[cfg(test)]
@@ -160,7 +154,7 @@ mod tests {
         let mut rng = StdRng::seed_from_u64(9);
         let export = build_random_rms(5, 8, &mut rng).expect("mul export");
 
-        assert_eq!(export.version, "rms-linear-v2");
+        assert_eq!(export.version, "rms-linear-v3");
         assert_eq!(export.num_witnesses, 9);
         assert_eq!(export.constraints.len(), 8);
         assert_eq!(export.num_public_inputs, 1);

@@ -360,7 +360,10 @@ fn run_with_config(
         "  Choudhuri blowup factor: {:.2}x",
         transformed.transformed.blowup_factor
     );
-    println!("  CSE eliminated duplicate constraints: {}", transformed.eliminated);
+    println!(
+        "  CSE eliminated duplicate constraints: {}",
+        transformed.eliminated
+    );
     println!(
         "  Final blowup factor: {:.2}x",
         transformed.optimized.constraints.len() as f64
@@ -370,7 +373,10 @@ fn run_with_config(
     println!("\n[3. Eval consistency]");
     println!("  Expected output: {}", evaluation.expected_output);
     println!("  Original circuit output: {}", evaluation.original_output);
-    println!("  Transformed circuit output: {}", evaluation.transformed_output);
+    println!(
+        "  Transformed circuit output: {}",
+        evaluation.transformed_output
+    );
     println!(
         "  Outputs match: {}  [constraints satisfied: orig={}, rms+cse={}]",
         evaluation.outputs_match, evaluation.original_valid, evaluation.transformed_valid
@@ -387,7 +393,8 @@ fn run_with_config(
         println!("  JSON/BIN contents match: {}", json_bin_match);
     }
     println!("  First 8 final RMS constraints:");
-    let exported_bin = load_r1cs_from_bin(&export.bin_path).expect("Failed to read BIN export file");
+    let exported_bin =
+        load_r1cs_from_bin(&export.bin_path).expect("Failed to read BIN export file");
     for constraint in exported_bin.constraints.iter().take(8) {
         println!(
             "    step {:>2}: ({} ) * ({} ) -> w{}",
@@ -608,7 +615,7 @@ Usage:
 Notes:
     Default: bit=8.
     alpha and beta are generated as a stable bitwise demo input set based on the chosen bit width, and arbitrary widths are supported.
-    By default only `.bin` is exported; append `--json` to also emit `.json`."
+    By default only `.bin` is exported; `.bin` contains a zstd-compressed `rms-linear-v3` payload. Append `--json` to also emit `.json`."
 }
 
 #[cfg(test)]
@@ -621,8 +628,16 @@ mod circuit_tests {
         alpha_bits: &[u64],
         beta_bits: &[u64],
     ) -> Assignment {
-        assert_eq!(circuit.num_bits, alpha_bits.len(), "alpha_bits length mismatch");
-        assert_eq!(circuit.num_bits, beta_bits.len(), "beta_bits length mismatch");
+        assert_eq!(
+            circuit.num_bits,
+            alpha_bits.len(),
+            "alpha_bits length mismatch"
+        );
+        assert_eq!(
+            circuit.num_bits,
+            beta_bits.len(),
+            "beta_bits length mismatch"
+        );
 
         Assignment::new(build_bit_inputs(
             &circuit.alpha_input_indices,
@@ -633,7 +648,8 @@ mod circuit_tests {
     }
 
     fn read_greater_than_output(circuit: &GreaterThanCircuit, assignment: &Assignment) -> u64 {
-        fr_to_u64(&assignment.witnesses[&circuit.output_witness_index]).expect("Comparison output exceeds u64")
+        fr_to_u64(&assignment.witnesses[&circuit.output_witness_index])
+            .expect("Comparison output exceeds u64")
     }
 
     fn bits_from_msb_string(bits: &str) -> Vec<u64> {

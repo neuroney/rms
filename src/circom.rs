@@ -303,7 +303,7 @@ fn build_export_input_config(
 
     let witness_values = load_reference_witness(generated)?.ok_or_else(|| {
         format!(
-            "rms-linear-v2 export requires concrete public input values; {}, unable to generate reference witness",
+            "rms-linear-v3 export requires concrete public input values; {}, unable to generate reference witness",
             reference_witness_unavailable_reason(generated)
         )
     })?;
@@ -376,7 +376,10 @@ fn run_with_export_options(path: &str, export_options: ExportBundleOptions) {
         "  Choudhuri blowup factor: {:.2}x",
         transformed.transformed.blowup_factor
     );
-    println!("  CSE eliminated duplicate constraints: {}", transformed.eliminated);
+    println!(
+        "  CSE eliminated duplicate constraints: {}",
+        transformed.eliminated
+    );
     println!(
         "  Final blowup factor: {:.2}x",
         transformed.optimized.constraints.len() as f64
@@ -411,7 +414,10 @@ fn run_with_export_options(path: &str, export_options: ExportBundleOptions) {
     } else {
         println!(
             "  Skipping eval: {}",
-            evaluation.skipped_reason.as_deref().unwrap_or("unknown reason")
+            evaluation
+                .skipped_reason
+                .as_deref()
+                .unwrap_or("unknown reason")
         );
     }
 
@@ -433,7 +439,8 @@ fn run_with_export_options(path: &str, export_options: ExportBundleOptions) {
         println!("  JSON/BIN contents match: {}", json_bin_match);
     }
     println!("  First 5 final RMS constraints:");
-    let exported_bin = load_r1cs_from_bin(&export.bin_path).expect("Failed to read BIN export file");
+    let exported_bin =
+        load_r1cs_from_bin(&export.bin_path).expect("Failed to read BIN export file");
     for constraint in exported_bin.constraints.iter().take(5) {
         println!(
             "    step {:>2}: ({} ) * ({} ) -> w{}",
@@ -480,19 +487,22 @@ pub fn run_with_args(args: &[String]) -> Result<(), String> {
 }
 
 fn usage_text() -> &'static str {
-        "\
+    "\
 Usage:
   cargo run -- circom <constraints.json|circuit.r1cs|circuit.circom> [--json]
   cargo run --example circom_json -- <constraints.json|circuit.r1cs|circuit.circom> [--json]
 
 Notes:
-    By default only `.bin` is exported; append `--json` to also emit `.json`."
+    By default only `.bin` is exported; `.bin` contains a zstd-compressed `rms-linear-v3` payload. Append `--json` to also emit `.json`."
 }
 
 fn print_generation_summary(generated: &GeneratedCircom) {
-        println!("  User input: {}", generated.artifacts.user_path.display());
-        println!("  Imported path: {}", generated.artifacts.import_path.display());
-        println!("  Format: {}", generated.artifacts.format.display_name());
+    println!("  User input: {}", generated.artifacts.user_path.display());
+    println!(
+        "  Imported path: {}",
+        generated.artifacts.import_path.display()
+    );
+    println!("  Format: {}", generated.artifacts.format.display_name());
     if let Some(source_path) = &generated.artifacts.source_path {
         println!("  Source: {}", source_path.display());
     }
@@ -621,7 +631,13 @@ fn build_artifacts_from_compiled_path(
     let format = match import_path.extension().and_then(|ext| ext.to_str()) {
         Some("json") => CircomImportFormat::ConstraintsJson,
         Some("r1cs") => CircomImportFormat::BinaryR1cs,
-        _ => return Err(format!("Could not recognize import file format: {}", import_path.display()).into()),
+        _ => {
+            return Err(format!(
+                "Could not recognize import file format: {}",
+                import_path.display()
+            )
+            .into())
+        }
     };
 
     let stem = import_path
@@ -738,7 +754,8 @@ fn parse_witness_json(path: &Path) -> Result<Vec<Fr>, Box<dyn Error>> {
     strings
         .into_iter()
         .map(|value| {
-            Fr::from_str(&value).map_err(|_| format!("Failed to parse witness value: {}", value).into())
+            Fr::from_str(&value)
+                .map_err(|_| format!("Failed to parse witness value: {}", value).into())
         })
         .collect()
 }
@@ -764,7 +781,10 @@ fn find_snarkjs_command() -> Result<ExternalCommand, Box<dyn Error>> {
         });
     }
 
-    Err("snarkjs was not found; expected one of node_modules/.bin/snarkjs / snarkjs / npx snarkjs".into())
+    Err(
+        "snarkjs was not found; expected one of node_modules/.bin/snarkjs / snarkjs / npx snarkjs"
+            .into(),
+    )
 }
 
 fn find_circom_command() -> Result<ExternalCommand, Box<dyn Error>> {

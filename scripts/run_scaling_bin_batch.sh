@@ -11,7 +11,6 @@ DRY_RUN=0
 ONLY_CSV=""
 
 MVPOLY_NUM_VARS=5
-PAGERANK_ITERATIONS=100
 
 usage() {
     cat <<'EOF'
@@ -24,13 +23,13 @@ Options:
   --skip-existing   Skip a case when a matching .bin already exists for its export stem.
   --dry-run         Print the commands without executing them.
   --only LIST       Comma-separated benchmark filter.
-                    Supported names: mvpoly, fixmat, twomat, gt, pubdb, privdb, pagerank, mimc7
+                    Supported names: mvpoly, polyev, fixmat, twomat, gt, pir, mimc7
   -h, --help        Show this help message.
 
 Examples:
   scripts/run_scaling_bin_batch.sh
   scripts/run_scaling_bin_batch.sh --debug --only mvpoly,gt,mimc7
-  scripts/run_scaling_bin_batch.sh --skip-existing --only pubdb,privdb,pagerank
+  scripts/run_scaling_bin_batch.sh --skip-existing --only fixmat,twomat,pir
 EOF
 }
 
@@ -53,7 +52,7 @@ matches_only_filter() {
         normalized_token="$(normalize_name "${token// /}")"
         case "$benchmark" in
             mvpoly)
-                [[ "$normalized_token" == "mvpoly" || "$normalized_token" == "dense_poly" || "$normalized_token" == "poly" ]] && return 0
+                [[ "$normalized_token" == "mvpoly" || "$normalized_token" == "polyev" || "$normalized_token" == "poly" ]] && return 0
                 ;;
             fixmat)
                 [[ "$normalized_token" == "fixmat" || "$normalized_token" == "fix_mat" ]] && return 0
@@ -64,14 +63,8 @@ matches_only_filter() {
             gt)
                 [[ "$normalized_token" == "gt" || "$normalized_token" == "greater_than" || "$normalized_token" == "greaterthan" ]] && return 0
                 ;;
-            pubdb)
-                [[ "$normalized_token" == "pubdb" || "$normalized_token" == "pub_db" ]] && return 0
-                ;;
-            privdb)
-                [[ "$normalized_token" == "privdb" || "$normalized_token" == "priv_db" ]] && return 0
-                ;;
-            pagerank)
-                [[ "$normalized_token" == "pagerank" || "$normalized_token" == "page_rank" ]] && return 0
+            pir)
+                [[ "$normalized_token" == "pir" ]] && return 0
                 ;;
             mimc7)
                 [[ "$normalized_token" == "mimc7" || "$normalized_token" == "mimc" ]] && return 0
@@ -246,8 +239,8 @@ fi
 
 for degree in 6 7 8 9 10; do
     run_case "$MANIFEST_PATH" "mvpoly" "degree" "$degree" \
-        "data/dense_poly_n${MVPOLY_NUM_VARS}_d${degree}" \
-        dense_poly "$MVPOLY_NUM_VARS" "$degree"
+        "data/polyev_n${MVPOLY_NUM_VARS}_d${degree}" \
+        polyev "$MVPOLY_NUM_VARS" "$degree"
 done
 
 for n in 200 400 600 800 1000; do
@@ -256,7 +249,7 @@ for n in 200 400 600 800 1000; do
         fixmat "$n"
 done
 
-for n in 30 50 70 90 110; do
+for n in 10 20 30 40 50; do
     run_case "$MANIFEST_PATH" "twomat" "matrix_size" "$n" \
         "data/two_mat_${n}x${n}" \
         twomat "$n"
@@ -268,25 +261,13 @@ for bits in 16 32 64 128 256; do
         greater_than "$bits"
 done
 
-for exponent in 10 12 14 16 18; do
-    run_case "$MANIFEST_PATH" "pubdb" "database_size" "2^${exponent}" \
-        "data/pub_db_n$((1 << exponent))" \
-        pubdb "$exponent"
+for exponent in 8 10 12 14 16; do
+    run_case "$MANIFEST_PATH" "pir" "database_size" "2^${exponent}" \
+        "data/pir_db_n$((1 << exponent))" \
+        pir "$exponent"
 done
 
-for exponent in 10 12 14 16 18; do
-    run_case "$MANIFEST_PATH" "privdb" "database_size" "2^${exponent}" \
-        "data/priv_db_n$((1 << exponent))" \
-        privdb "$exponent"
-done
-
-for n in 200 400 600 800 1000; do
-    run_case "$MANIFEST_PATH" "pagerank" "graph_size" "$n" \
-        "data/page_rank_${n}v_${PAGERANK_ITERATIONS}iter" \
-        page_rank "$n" "$PAGERANK_ITERATIONS"
-done
-
-for rounds in 3 4 5 6 7; do
+for rounds in 2 3 4 5 6; do
     run_case "$MANIFEST_PATH" "mimc7" "round_count" "$rounds" \
         "data/mimc7_r${rounds}" \
         mimc7 "$rounds"

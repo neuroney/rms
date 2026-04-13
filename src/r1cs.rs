@@ -1,8 +1,11 @@
 //! Core R1CS and RMS export data structures plus basic circuit statistics helpers.
 
 use ark_bn254::Fr;
-use serde::{Deserialize, Serialize};
+use ark_ff::{BigInt, PrimeField};
+use serde::de::Error as DeError;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::HashMap;
+use std::str::FromStr;
 
 /// Represents variables in the constraint system.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -11,10 +14,172 @@ pub enum Variable {
     Witness(usize), // Private witness, index starts from 1
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct FieldElement {
+    bytes: [u8; 32],
+}
+
+impl FieldElement {
+    pub const BYTE_LEN: usize = 32;
+    pub const ZERO: Self = Self { bytes: [0; 32] };
+
+    pub fn from_fr(value: Fr) -> Self {
+        let bigint = value.into_bigint();
+        let mut bytes = [0u8; Self::BYTE_LEN];
+        for (chunk, limb) in bytes.chunks_exact_mut(8).zip(bigint.0.iter()) {
+            chunk.copy_from_slice(&limb.to_le_bytes());
+        }
+        Self { bytes }
+    }
+
+    pub fn from_u64(value: u64) -> Self {
+        Self::from_fr(Fr::from(value))
+    }
+
+    pub fn from_i64(value: i64) -> Self {
+        if value >= 0 {
+            Self::from_u64(value as u64)
+        } else {
+            Self::from_fr(-Fr::from((-value) as u64))
+        }
+    }
+
+    pub fn from_decimal_str(raw: &str) -> Result<Self, String> {
+        let value = Fr::from_str(raw)
+            .map_err(|_| format!("invalid field element decimal representation: {raw}"))?;
+        Ok(Self::from_fr(value))
+    }
+
+    pub fn from_bytes(bytes: [u8; Self::BYTE_LEN]) -> Result<Self, String> {
+        let value = Self { bytes };
+        let _ = value.try_to_fr()?;
+        Ok(value)
+    }
+
+    pub fn as_bytes(&self) -> &[u8; Self::BYTE_LEN] {
+        &self.bytes
+    }
+
+    pub fn try_to_fr(&self) -> Result<Fr, String> {
+        let mut limbs = [0u64; 4];
+        for (idx, chunk) in self.bytes.chunks_exact(8).enumerate() {
+            limbs[idx] = u64::from_le_bytes(chunk.try_into().expect("8-byte chunk"));
+        }
+
+        Fr::from_bigint(BigInt::<4>(limbs))
+            .ok_or_else(|| "field element bytes are not a canonical BN254 scalar".to_string())
+    }
+
+    pub fn to_fr(&self) -> Fr {
+        self.try_to_fr()
+            .expect("FieldElement should always contain a canonical BN254 scalar")
+    }
+
+    pub fn to_decimal_string(&self) -> String {
+        self.to_fr().into_bigint().to_string()
+    }
+
+    pub fn is_zero(&self) -> bool {
+        self.bytes.iter().all(|byte| *byte == 0)
+    }
+
+    pub fn is_one(&self) -> bool {
+        self.bytes[0] == 1 && self.bytes[1..].iter().all(|byte| *byte == 0)
+    }
+}
+
+impl Default for FieldElement {
+    fn default() -> Self {
+        Self::ZERO
+    }
+}
+
+impl From<Fr> for FieldElement {
+    fn from(value: Fr) -> Self {
+        Self::from_fr(value)
+    }
+}
+
+impl From<u64> for FieldElement {
+    fn from(value: u64) -> Self {
+        Self::from_u64(value)
+    }
+}
+
+impl From<i64> for FieldElement {
+    fn from(value: i64) -> Self {
+        Self::from_i64(value)
+    }
+}
+
+impl std::fmt::Display for FieldElement {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.to_decimal_string())
+    }
+}
+
+impl PartialEq<&str> for FieldElement {
+    fn eq(&self, other: &&str) -> bool {
+        self.to_decimal_string() == *other
+    }
+}
+
+impl Serialize for FieldElement {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        if serializer.is_human_readable() {
+            serializer.serialize_str(&self.to_decimal_string())
+        } else {
+            self.bytes.serialize(serializer)
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for FieldElement {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        if deserializer.is_human_readable() {
+            let raw = String::deserialize(deserializer)?;
+            Self::from_decimal_str(&raw).map_err(D::Error::custom)
+        } else {
+            let bytes = <[u8; Self::BYTE_LEN]>::deserialize(deserializer)?;
+            Self::from_bytes(bytes).map_err(D::Error::custom)
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Term {
     pub index: usize,
-    pub coeff: String,
+    pub coeff: FieldElement,
+}
+
+impl Term {
+    pub fn from_i64(index: usize, coeff: i64) -> Self {
+        Self {
+            index,
+            coeff: FieldElement::from_i64(coeff),
+        }
+    }
+
+    pub fn from_fr(index: usize, coeff: Fr) -> Self {
+        Self {
+            index,
+            coeff: FieldElement::from_fr(coeff),
+        }
+    }
+
+    pub fn is_zero_coeff(&self) -> bool {
+        self.coeff.is_zero()
+    }
+
+    pub fn is_one_coeff(&self) -> bool {
+        self.coeff.is_one()
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -28,7 +193,23 @@ pub struct ExportConstraint {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PublicInputValue {
     pub index: usize,
-    pub value: String,
+    pub value: FieldElement,
+}
+
+impl PublicInputValue {
+    pub fn from_fr(index: usize, value: Fr) -> Self {
+        Self {
+            index,
+            value: FieldElement::from_fr(value),
+        }
+    }
+
+    pub fn from_u64(index: usize, value: u64) -> Self {
+        Self {
+            index,
+            value: FieldElement::from_u64(value),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]

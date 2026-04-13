@@ -27,14 +27,14 @@ pub enum DatabaseVisibility {
 impl DatabaseVisibility {
     fn label(self) -> &'static str {
         match self {
-            Self::Public => "PubDB",
+            Self::Public => "PIR",
             Self::Private => "PrivDB",
         }
     }
 
     fn export_stem(self, num_records: usize) -> String {
         match self {
-            Self::Public => format!("data/pub_db_n{}", num_records),
+            Self::Public => format!("data/pir_db_n{}", num_records),
             Self::Private => format!("data/priv_db_n{}", num_records),
         }
     }
@@ -116,8 +116,8 @@ impl DbSelectRunConfig {
     }
 
     pub fn for_exponent(visibility: DatabaseVisibility, exponent: usize) -> Self {
-        let num_records =
-            records_from_exponent(exponent).expect("Record-count exponent must safely convert to 2^x");
+        let num_records = records_from_exponent(exponent)
+            .expect("Record-count exponent must safely convert to 2^x");
         Self::for_records(visibility, num_records)
     }
 }
@@ -280,15 +280,15 @@ pub fn export_circuit_with_options(
     write_export_bundle_with_options(&generated.config.export_stem, &export, export_options)
 }
 
-pub fn run_public() {
-    run_pub_with_args(&[]).expect("PubDB example failed");
+pub fn run_pir() {
+    run_pir_with_args(&[]).expect("PIR example failed");
 }
 
 pub fn run_private() {
     run_priv_with_args(&[]).expect("PrivDB example failed");
 }
 
-pub fn run_pub_with_args(args: &[String]) -> Result<(), String> {
+pub fn run_pir_with_args(args: &[String]) -> Result<(), String> {
     run_with_args(DatabaseVisibility::Public, args)
 }
 
@@ -378,7 +378,10 @@ fn run_with_config(
         "  Choudhuri blowup factor: {:.2}x",
         transformed.transformed.blowup_factor
     );
-    println!("  CSE eliminated duplicate constraints: {}", transformed.eliminated);
+    println!(
+        "  CSE eliminated duplicate constraints: {}",
+        transformed.eliminated
+    );
     println!(
         "  Final blowup factor: {:.2}x",
         transformed.optimized.constraints.len() as f64
@@ -414,7 +417,8 @@ fn run_with_config(
         println!("  JSON/BIN contents match: {}", json_bin_match);
     }
     println!("  First 8 final RMS constraints:");
-    let exported_bin = load_r1cs_from_bin(&export.bin_path).expect("Failed to read BIN export file");
+    let exported_bin =
+        load_r1cs_from_bin(&export.bin_path).expect("Failed to read BIN export file");
     for constraint in exported_bin.constraints.iter().take(8) {
         println!(
             "    step {:>2}: ({} ) * ({} ) -> w{}",
@@ -666,8 +670,8 @@ fn parse_usize_arg(name: &str, raw: &str) -> Result<usize, String> {
 }
 
 fn records_from_exponent(exponent: usize) -> Result<usize, String> {
-    let shift =
-        u32::try_from(exponent).map_err(|_| format!("x={exponent} is too large to convert to a shift amount"))?;
+    let shift = u32::try_from(exponent)
+        .map_err(|_| format!("x={exponent} is too large to convert to a shift amount"))?;
     1usize
         .checked_shl(shift)
         .ok_or_else(|| format!("x={exponent} is too large, num_records = 2^x overflows usize"))
@@ -678,12 +682,12 @@ fn usage_text(visibility: DatabaseVisibility) -> &'static str {
         DatabaseVisibility::Public => {
             "\
 Usage:
-  cargo run -- pubdb [--json]
-  cargo run -- pubdb <x> [--json]
+  cargo run -- pir [--json]
+  cargo run -- pir <x> [--json]
 
 Notes:
-    PubDB: private address selection over a public database; internal addresses are encoded as 0..n-1, with n = 2^x.
-    By default only `.bin` is exported; append `--json` to also emit `.json`."
+    PIR: private address selection over a public database; internal addresses are encoded as 0..n-1, with n = 2^x.
+    By default only `.bin` is exported; `.bin` contains a zstd-compressed `rms-linear-v3` payload. Append `--json` to also emit `.json`."
         }
         DatabaseVisibility::Private => {
             "\
@@ -693,7 +697,7 @@ Usage:
 
 Notes:
     PrivDB: private address selection over a private database; internal addresses are encoded as 0..n-1, with n = 2^x.
-    By default only `.bin` is exported; append `--json` to also emit `.json`."
+    By default only `.bin` is exported; `.bin` contains a zstd-compressed `rms-linear-v3` payload. Append `--json` to also emit `.json`."
         }
     }
 }
@@ -718,7 +722,7 @@ mod tests {
     }
 
     #[test]
-    fn pubdb_transform_preserves_selected_record() {
+    fn pir_transform_preserves_selected_record() {
         let generated = generate_circuit(DbSelectRunConfig::for_records(
             DatabaseVisibility::Public,
             8,
@@ -761,7 +765,7 @@ mod tests {
     }
 
     #[test]
-    fn pubdb_export_marks_database_public() {
+    fn pir_export_marks_database_public() {
         let generated = generate_circuit(DbSelectRunConfig::for_records(
             DatabaseVisibility::Public,
             8,

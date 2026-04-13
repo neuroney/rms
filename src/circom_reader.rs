@@ -558,8 +558,8 @@ fn parse_generic_lincomb(raw: HashMap<String, String>) -> Result<GenericLinComb,
         .into_iter()
         .map(|(signal, coeff)| {
             let signal_id = signal.parse::<usize>()?;
-            let coeff =
-                Fr::from_str(&coeff).map_err(|_| format!("Failed to parse Circom coefficient: {}", coeff))?;
+            let coeff = Fr::from_str(&coeff)
+                .map_err(|_| format!("Failed to parse Circom coefficient: {}", coeff))?;
             Ok((coeff, signal_id))
         })
         .collect::<Result<Vec<_>, Box<dyn Error>>>()?;
@@ -784,10 +784,12 @@ fn extract_signal_definitions(
             protected_signal_ids,
             preferred_signal_ids,
         ) {
-            let coeff = constraint
-                .c
-                .coefficient_of(target)
-                .ok_or_else(|| format!("Could not find target signal {} in the quadratic constraint", target))?;
+            let coeff = constraint.c.coefficient_of(target).ok_or_else(|| {
+                format!(
+                    "Could not find target signal {} in the quadratic constraint",
+                    target
+                )
+            })?;
             let inv = coeff
                 .inverse()
                 .ok_or_else(|| format!("The coefficient of signal {} is not invertible", target))?;
@@ -1001,7 +1003,11 @@ impl<'a> BuildState<'a> {
         }
 
         if !self.linear_signal_in_progress.insert(signal_id) {
-            return Err(format!("Detected cyclic linear resolution for Circom signal {}", signal_id).into());
+            return Err(format!(
+                "Detected cyclic linear resolution for Circom signal {}",
+                signal_id
+            )
+            .into());
         }
 
         let candidate_indices = self
@@ -1063,7 +1069,11 @@ impl<'a> BuildState<'a> {
 
     fn materialize_signal(&mut self, signal_id: usize) -> Result<usize, Box<dyn Error>> {
         if self.input_signal_to_index.contains_key(&signal_id) {
-            return Err(format!("Signal {} is an input and cannot be materialized as a witness", signal_id).into());
+            return Err(format!(
+                "Signal {} is an input and cannot be materialized as a witness",
+                signal_id
+            )
+            .into());
         }
 
         self.ensure_signal_definition(signal_id)?;
@@ -1074,7 +1084,9 @@ impl<'a> BuildState<'a> {
             return Ok(witness_idx);
         }
         if !self.signal_in_progress.insert(signal_id) {
-            return Err(format!("Detected cyclic definition for Circom signal {}", signal_id).into());
+            return Err(
+                format!("Detected cyclic definition for Circom signal {}", signal_id).into(),
+            );
         }
 
         let definition = self
@@ -1804,8 +1816,8 @@ mod tests {
                 &imported.normalized_r1cs,
                 &original_assignment
             ));
-            let original_output =
-                fr_to_u64(&original_assignment.witnesses[&output_witness]).expect("Output exceeds u64");
+            let original_output = fr_to_u64(&original_assignment.witnesses[&output_witness])
+                .expect("Output exceeds u64");
 
             let mut optimized_assignment = Assignment::new(vec![
                 (imported.input_signal_to_index[&2], a),
@@ -1813,8 +1825,8 @@ mod tests {
             ]);
             assert!(execute_circuit(&optimized, &mut optimized_assignment).is_some());
             assert!(verify_assignment(&optimized, &optimized_assignment));
-            let optimized_output =
-                fr_to_u64(&optimized_assignment.witnesses[&output_witness]).expect("Output exceeds u64");
+            let optimized_output = fr_to_u64(&optimized_assignment.witnesses[&output_witness])
+                .expect("Output exceeds u64");
 
             assert_eq!(
                 original_output, expected,
@@ -1856,8 +1868,8 @@ mod tests {
                 &imported.normalized_r1cs,
                 &original_assignment
             ));
-            let original_output =
-                fr_to_u64(&original_assignment.witnesses[&output_witness]).expect("Output exceeds u64");
+            let original_output = fr_to_u64(&original_assignment.witnesses[&output_witness])
+                .expect("Output exceeds u64");
 
             let mut optimized_assignment = Assignment::new(vec![
                 (imported.input_signal_to_index[&2], a),
@@ -1865,8 +1877,8 @@ mod tests {
             ]);
             assert!(execute_circuit(&optimized, &mut optimized_assignment).is_some());
             assert!(verify_assignment(&optimized, &optimized_assignment));
-            let optimized_output =
-                fr_to_u64(&optimized_assignment.witnesses[&output_witness]).expect("Output exceeds u64");
+            let optimized_output = fr_to_u64(&optimized_assignment.witnesses[&output_witness])
+                .expect("Output exceeds u64");
 
             assert_eq!(
                 original_output, expected,
